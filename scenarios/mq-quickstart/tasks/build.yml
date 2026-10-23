@@ -189,6 +189,30 @@
   loop_control:
     label: "{{ item.name }}"
 
+# --- Tickets ------------------------------------------------------------------------
+# Not linted: gates.txt is a reviewer's copy, and kafka-access.sh runs on the
+# Kafka team's admin host, not on z/OS.
+- name: Write the approval gates for the tickets
+  ansible.builtin.template:
+    src: gates.txt.j2
+    dest: "{{ out_dir }}/gates.txt"
+    mode: "0600"
+
+# A Confluent Cloud build removes the directory so a stale CP script cannot be
+# mistaken for this run's output.
+- name: Keep out/<host>/kafka/ for a Confluent Platform target only
+  ansible.builtin.file:
+    path: "{{ out_dir }}/kafka"
+    state: "{{ 'directory' if (cp_target | bool) else 'absent' }}"
+    mode: "0700"
+
+- name: Render the Kafka access script (gated; the Kafka platform team runs it)
+  ansible.builtin.template:
+    src: kafka-access.sh.j2
+    dest: "{{ out_dir }}/kafka/kafka-access.sh"
+    mode: "0600"
+  when: cp_target | bool
+
 # --- Lint ---------------------------------------------------------------------------
 - name: Lint everything z/OS will read
   ansible.builtin.command:

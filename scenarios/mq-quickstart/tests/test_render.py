@@ -117,6 +117,111 @@ def test_cc_target_keeps_the_api_key_path(tmp_path):
     assert not [k for k in config if "keystore" in k]
 
 
+RBAC_BINDINGS = [
+    "bind ResourceOwner Group:zos-connect-kafconn",
+    "bind ResourceOwner Topic:zos-connect-kafconn-configs",
+    "bind ResourceOwner Topic:zos-connect-kafconn-offsets",
+    "bind ResourceOwner Topic:zos-connect-kafconn-status",
+    "bind DeveloperRead Topic:_confluent-command",
+    "bind DeveloperWrite Topic:_confluent-command",
+    "bind DeveloperWrite Topic:payments.mq-bridge.v1.transaction",
+]
+SINK_RBAC = [
+    "bind DeveloperRead Topic:payments.mq-bridge.v1.settlement",
+    "bind DeveloperRead Group:connect-mq-zos-sink-settlement",
+]
+
+
+def script_lines(path):
+    subprocess.run(["bash", "-n", str(path)], check=True)
+    return path.read_text().splitlines()
+
+
+def test_cp_kafka_access_script_is_gated_rbac(rendered):
+    lines = script_lines(rendered / "kafka" / "kafka-access.sh")
+    assert lines[0] == "#!/usr/bin/env bash"
+    assert "# GATED: for the Kafka platform team. This kit never runs it." in lines
+    assert "set -euo pipefail" in lines
+    assert "PRINCIPAL=User:kafconn" in lines and "KAFKA_CLUSTER_ID=TestKafkaCluster0" in lines
+    assert any(line.startswith(': "${MDS_URL:?') for line in lines)
+    for binding in RBAC_BINDINGS:
+        assert binding in lines, binding
+    assert not [line for line in lines if line.startswith("bind ") and line not in RBAC_BINDINGS]
+    assert not [line for line in lines if "kafka-acls" in line]
+
+
+def test_cp_kafka_access_script_covers_the_sink(tmp_path):
+    _tar, zipfile_path = build_fake_archives(tmp_path / "sinkzip")
+    proc, out = run_build(tmp_path, "mq_sink_connector_zip=%s" % zipfile_path)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    lines = script_lines(out / "kafka" / "kafka-access.sh")
+    for binding in RBAC_BINDINGS + SINK_RBAC:
+        assert binding in lines, binding
+
+
+def test_cp_kafka_access_script_in_acl_mode(tmp_path):
+    proc, out = run_build(tmp_path, "cp_authorizer=acls")
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    lines = script_lines(out / "kafka" / "kafka-access.sh")
+    expected = [
+        "acl --operation Read --group zos-connect-kafconn",
+        "acl --operation Create --operation Read --operation Write --topic zos-connect-kafconn-configs",
+        "acl --operation Create --operation Read --operation Write --topic zos-connect-kafconn-offsets",
+        "acl --operation Create --operation Read --operation Write --topic zos-connect-kafconn-status",
+        "acl --operation Describe --operation Read --operation Write --topic _confluent-command",
+        "acl --operation Write --topic payments.mq-bridge.v1.transaction",
+    ]
+    for acl in expected:
+        assert acl in lines, acl
+    assert any(line.startswith(': "${ADMIN_CONFIG:?') for line in lines)
+    assert not [line for line in lines if "confluent iam" in line or line.startswith("bind ")]
+
+
+def test_cc_target_renders_no_kafka_access_and_clears_a_stale_one(tmp_path):
+    proc, out = run_build(tmp_path)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    assert (out / "kafka" / "kafka-access.sh").is_file()
+    proc, out = run_build(tmp_path, CC_TARGET)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    assert not (out / "kafka").exists()
+
+
+@pytest.mark.parametrize("placement,network", [
+    ("same_cec", "SYSPROG   network path inside this CEC (HiperSockets or SMC-D) from the LPAR to "
+                 "kafka-0.cp.test:9093,kafka-1.cp.test:9093 (preflight tested it)"),
+    ("linuxone", "NETWORK   path to the adjacent LinuxONE (SMC-R over RoCE Express, or OSA) from the LPAR to "
+                 "kafka-0.cp.test:9093,kafka-1.cp.test:9093 (preflight tested it)"),
+    ("distributed", "NETWORK   routed path and firewall rules from the LPAR to "
+                    "kafka-0.cp.test:9093,kafka-1.cp.test:9093 (preflight tested it)"),
+])
+def test_gates_name_the_network_path_for_the_placement(tmp_path, placement, network):
+    proc, out = run_build(tmp_path, "cp_placement=" + placement)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    gates = read(out, "gates.txt").splitlines()
+    assert network in gates
+    assert [g for g in gates if g.startswith(("NETWORK", "SYSPROG   network"))] == [
+        network, "NETWORK   inbound TCP 8083 to zos-test.example.com from this controller"]
+    kafka = [g for g in gates if g.startswith("KAFKA")]
+    assert kafka == ["KAFKA     review + apply %s/kafka/kafka-access.sh: rbac for User:kafconn" % out]
+
+
+def test_cc_gates_keep_the_outbound_ticket_only(tmp_path):
+    proc, out = run_build(tmp_path, CC_TARGET)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    gates = read(out, "gates.txt").splitlines()
+    assert "NETWORK   outbound pkc-test1.us-east-1.aws.confluent.cloud:9092 from the LPAR (preflight tested it)" in gates
+    assert not [g for g in gates if g.startswith("KAFKA") or "HiperSockets" in g]
+
+
+def test_cp_with_jvm_default_trust_gets_a_cacerts_gate(tmp_path):
+    proc, out = run_build(tmp_path, "tls_truststore=jvm_default")
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    gates = read(out, "gates.txt").splitlines()
+    assert ("SYSPROG   add the CA that signs the brokers to /usr/lpp/java/J17.0_64/lib/security/cacerts "
+            "(tls_truststore: jvm_default)") in gates
+    assert not [g for g in gates if "RACFRING" in g]
+
+
 @pytest.mark.parametrize("bad", ["kafka_target=onprem", "cp_placement=mainframe", "cp_authorizer=ldap"])
 def test_unknown_target_choice_stops_the_build(tmp_path, bad):
     proc, _out = run_build(tmp_path, bad)

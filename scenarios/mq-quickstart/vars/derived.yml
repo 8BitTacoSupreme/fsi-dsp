@@ -81,6 +81,39 @@ mq_sink_enabled: "{{ (mq_sink_connector_zip | default('')) | length > 0 }}"
 racf_keyring_enabled: "{{ tls_truststore == 'racf_keyring' }}"
 racf_ca_stage_needed: "{{ (racf_keyring_enabled | bool) and not (racf_ca_already_defined | bool) }}"
 
+# --- Approval gates: the tickets between run 1 and run 2 ---------------------------
+# One list for both places that show it: out/<host>/gates.txt (build) and the
+# stage play's closing message. cp_placement only changes who owns the network
+# path and what it is; the worker config is the same for all three.
+network_gate_by_placement:
+  same_cec: >-
+    SYSPROG   network path inside this CEC (HiperSockets or SMC-D) from the LPAR
+    to {{ kafka_bootstrap }} (preflight tested it)
+  linuxone: >-
+    NETWORK   path to the adjacent LinuxONE (SMC-R over RoCE Express, or OSA) from
+    the LPAR to {{ kafka_bootstrap }} (preflight tested it)
+  distributed: >-
+    NETWORK   routed path and firewall rules from the LPAR to {{ kafka_bootstrap }}
+    (preflight tested it)
+approval_gates_all:
+  - "SECURITY  review + submit {{ stage_cntl }}(RACFSTC): STARTED {{ stc_name }}.* -> {{ stc_user }}/{{ stc_group }}"
+  - >-
+    {{ ('SECURITY  review + submit ' ~ stage_cntl ~ '(RACFRING): key ring ' ~ racf_keyring
+    ~ ' + IRR.DIGTCERT.LISTRING READ') if (racf_keyring_enabled | bool) else '' }}
+  - "SYSPROG   review + submit {{ stage_cntl }}(PROCCOPY): {{ stc_name }} into {{ target_proclib }}"
+  - >-
+    {{ network_gate_by_placement[cp_placement] if (cp_target | bool)
+    else 'NETWORK   outbound ' ~ kafka_bootstrap ~ ' from the LPAR (preflight tested it)' }}
+  - >-
+    {{ ('KAFKA     review + apply ' ~ out_dir ~ '/kafka/kafka-access.sh: ' ~ cp_authorizer
+    ~ ' for ' ~ kafka_client_principal) if (cp_target | bool) else '' }}
+  - >-
+    {{ ('SYSPROG   add the CA that signs the brokers to ' ~ zos_java_home
+    ~ '/lib/security/cacerts (tls_truststore: jvm_default)')
+    if ((cp_target | bool) and not (racf_keyring_enabled | bool)) else '' }}
+  - "NETWORK   inbound TCP {{ connect_rest_port }} to {{ connect_rest_host }} from this controller"
+approval_gates: "{{ approval_gates_all | select | list }}"
+
 # --- Health: log signatures of the failures that eat install time ------------------
 health_log_patterns:
   - pattern: "ClassNotFoundException|NoClassDefFoundError"
