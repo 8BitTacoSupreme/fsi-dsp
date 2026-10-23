@@ -69,9 +69,19 @@ def build_fake_archives(dest):
     return tarball, connector
 
 
+def fake_keystore(dest):
+    """Stand-in for the PKCS12 the Kafka platform team issues. Written per test
+    instead of committed: secret scanners flag any .p12 in the tree."""
+    dest.mkdir(parents=True, exist_ok=True)
+    keystore = dest / "kafka-client.p12"
+    keystore.write_bytes(b"\x30\x82" + bytes(range(64)))
+    return keystore
+
+
 def run_build(workdir, *extra_vars):
     """Run the build play against the test inventory. Returns (proc, out_dir)."""
     tarball, connector = build_fake_archives(workdir / "downloads")
+    keystore = fake_keystore(workdir / "downloads")
     playbook = Path(sys.executable).parent / "ansible-playbook"
     cmd = [
         str(playbook), "site.yml",
@@ -79,6 +89,7 @@ def run_build(workdir, *extra_vars):
         "-e", "@tests/fixtures/inputs.test.yml",
         "-e", "connect_tarball=%s" % tarball,
         "-e", "mq_source_connector_zip=%s" % connector,
+        "-e", "kafka_client_keystore=%s" % keystore,
         "-e", "out_root=%s" % workdir,
         "--tags", "build", "--skip-tags", "preflight",
     ]

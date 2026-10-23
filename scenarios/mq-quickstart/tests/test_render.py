@@ -1,15 +1,39 @@
 """The build play, run for real against fake archives, must produce files that
 fix the guide's defects -- and must refuse to build when an input would
 reintroduce one."""
+import json
 import re
 import subprocess
 import tarfile
 
+import pytest
+
 from conftest import PLUGIN, TOPDIR, build_fake_archives, run_build
+
+KEYSTORE = "/u/kafconn/config/ssl/kafka-client.p12"
+CLIENT_PREFIXES = ("", "producer.", "consumer.")
+
+# Confluent Cloud run: its own credentials defined, the CP-only inputs made
+# undefined, so the CC path is proven not to read them. One JSON -e because
+# the values hold spaces and quotes.
+CC_TARGET = json.dumps({
+    "kafka_target": "cc",
+    "kafka_bootstrap": "pkc-test1.us-east-1.aws.confluent.cloud:9092",
+    "vault_kafka_api_key": "TESTKEY",
+    "vault_kafka_api_secret": "TESTSECRET",
+    "kafka_client_keystore": "{{ undefined_cp_only_input }}",
+    "kafka_keystore_password": "{{ undefined_cp_only_input }}",
+    "kafka_client_principal": "{{ undefined_cp_only_input }}",
+    "cp_kafka_cluster_id": "{{ undefined_cp_only_input }}",
+})
 
 
 def read(out, rel):
     return (out / rel).read_text()
+
+
+def source_connector(out):
+    return json.loads(read(out, "connectors/mq-zos-source-transaction.json"))
 
 
 def test_proc_runs_bash_under_pgm_within_the_parm_limit(rendered):
@@ -44,9 +68,85 @@ def test_worker_uses_listeners_and_prefixed_security(rendered):
     props = read(rendered, "rendered/connect-distributed.properties").splitlines()
     assert "listeners=http://0.0.0.0:8083" in props
     assert not any(p.startswith(("rest.port", "rest.host.name")) for p in props)
-    for prefix in ("", "producer.", "consumer."):
-        assert prefix + "security.protocol=SASL_SSL" in props
+    assert "bootstrap.servers=kafka-0.cp.test:9093,kafka-1.cp.test:9093" in props
+    # Connect hands producers and consumers only their prefixed settings, so
+    # the mTLS block has to be there three times (Kafka 4.1 Worker).
+    for prefix in CLIENT_PREFIXES:
+        assert prefix + "security.protocol=SSL" in props
+        assert prefix + "ssl.keystore.type=PKCS12" in props
+        assert prefix + "ssl.keystore.location=" + KEYSTORE in props
+        assert prefix + "ssl.keystore.password=TESTKSPW" in props
+        assert prefix + "ssl.endpoint.identification.algorithm=https" in props
+    assert not [p for p in props if "sasl." in p]
     assert "plugin.path=/u/kafconn/plugins" in props
+
+
+def test_cp_license_client_uses_the_same_mtls_identity(rendered):
+    config = source_connector(rendered)
+    assert config["confluent.topic.bootstrap.servers"] == "kafka-0.cp.test:9093,kafka-1.cp.test:9093"
+    assert config["confluent.topic.security.protocol"] == "SSL"
+    assert config["confluent.topic.ssl.keystore.type"] == "PKCS12"
+    assert config["confluent.topic.ssl.keystore.location"] == KEYSTORE
+    assert config["confluent.topic.ssl.keystore.password"] == "TESTKSPW"
+    assert not [k for k in config if "sasl" in k]
+    assert all(isinstance(v, str) for v in config.values())
+
+
+def test_backslash_in_a_secret_survives_properties_parsing(tmp_path):
+    # Java .properties reads "\x" as an escape; the JSON body needs no doubling.
+    proc, out = run_build(tmp_path, json.dumps({"kafka_keystore_password": "pa\\ss"}))
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    props = read(out, "rendered/connect-distributed.properties").splitlines()
+    for prefix in CLIENT_PREFIXES:
+        assert prefix + "ssl.keystore.password=pa\\\\ss" in props
+    assert source_connector(out)["confluent.topic.ssl.keystore.password"] == "pa\\ss"
+
+
+def test_cc_target_keeps_the_api_key_path(tmp_path):
+    proc, out = run_build(tmp_path, CC_TARGET)
+    assert proc.returncode == 0, proc.stdout[-4000:]
+    props = read(out, "rendered/connect-distributed.properties").splitlines()
+    for prefix in CLIENT_PREFIXES:
+        assert prefix + "security.protocol=SASL_SSL" in props
+        assert prefix + "sasl.mechanism=PLAIN" in props
+    assert any(p.startswith("sasl.jaas.config=") and 'username="TESTKEY"' in p for p in props)
+    assert not [p for p in props if "ssl.keystore" in p]
+    config = source_connector(out)
+    assert config["confluent.topic.security.protocol"] == "SASL_SSL"
+    assert 'password="TESTSECRET"' in config["confluent.topic.sasl.jaas.config"]
+    assert not [k for k in config if "keystore" in k]
+
+
+@pytest.mark.parametrize("bad", ["kafka_target=onprem", "cp_placement=mainframe", "cp_authorizer=ldap"])
+def test_unknown_target_choice_stops_the_build(tmp_path, bad):
+    proc, _out = run_build(tmp_path, bad)
+    assert proc.returncode != 0
+    assert bad.split("=")[0] in proc.stdout
+
+
+def test_cp_default_refuses_a_confluent_cloud_bootstrap(tmp_path):
+    # An inputs.yml from before the CP target has no kafka_target and a CC
+    # bootstrap: say what to set instead of failing on a missing keystore.
+    proc, _out = run_build(tmp_path, "kafka_bootstrap=pkc-old.us-east-1.aws.confluent.cloud:9092")
+    assert proc.returncode != 0
+    assert "set kafka_target: cc" in proc.stdout
+
+
+def test_missing_keystore_stops_the_build(tmp_path):
+    proc, _out = run_build(tmp_path, "kafka_client_keystore=%s" % (tmp_path / "absent.p12"))
+    assert proc.returncode != 0
+    assert "kafka_client_keystore" in proc.stdout and "absent.p12" in proc.stdout
+
+
+@pytest.mark.parametrize("placeholder", [
+    "kafka_client_principal=User:<PLACEHOLDER_CN>",
+    "cp_kafka_cluster_id=<PLACEHOLDER_CLUSTER_ID>",
+    "racf_ca_label=<PLACEHOLDER_CA_LABEL>",
+])
+def test_cp_placeholders_stop_the_build(tmp_path, placeholder):
+    proc, _out = run_build(tmp_path, placeholder)
+    assert proc.returncode != 0
+    assert "still has a placeholder: " + placeholder.split("=", 1)[1] in proc.stdout
 
 
 def test_bundle_keeps_exec_bits_shebangs_and_binary_jars(rendered, tmp_path):

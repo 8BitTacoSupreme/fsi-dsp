@@ -28,9 +28,19 @@ mq_client_jars:
 mq_source_queue: PAYMENTS.TXN.OUT
 mq_sink_queue: PAYMENTS.TXN.IN
 
-kafka_bootstrap: pkc-test1.us-east-1.aws.confluent.cloud:9092
-kafka_api_key: TESTKEY
-kafka_api_secret: TESTSECRET
+# Confluent Platform is the default target. The CC credentials stay vault
+# references that this file never defines: a CP build that rendered them
+# would fail, which is how the tests prove the CP path never reads them.
+kafka_target: cp
+cp_placement: same_cec
+cp_authorizer: rbac
+kafka_bootstrap: kafka-0.cp.test:9093,kafka-1.cp.test:9093
+kafka_client_keystore: OVERRIDDEN_BY_TEST
+kafka_keystore_password: TESTKSPW
+kafka_client_principal: "User:kafconn"
+cp_kafka_cluster_id: TestKafkaCluster0
+kafka_api_key: "{{ vault_kafka_api_key }}"
+kafka_api_secret: "{{ vault_kafka_api_secret }}"
 confluent_license: ""
 connect_group_id: zos-connect-kafconn
 mq_source_topic: payments.mq-bridge.v1.transaction
@@ -45,7 +55,7 @@ connect_rest_host: zos-test.example.com
 
 tls_truststore: racf_keyring
 racf_keyring: KAFCONN.RING
-racf_ca_label: ISRG Root X1
+racf_ca_label: FSI Kafka Root CA
 racf_ca_pem: /dev/null
 racf_ca_already_defined: false
 

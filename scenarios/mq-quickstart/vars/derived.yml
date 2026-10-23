@@ -43,6 +43,39 @@ kafka_sasl_jaas_config: >-
   org.apache.kafka.common.security.plain.PlainLoginModule required
   username="{{ kafka_api_key }}" password="{{ kafka_api_secret }}";
 
+# Defaults for the target inputs, so an inputs.yml written before the CP target
+# existed reaches the "set kafka_target: cc" assert instead of an undefined
+# variable. inputs.yml (-e) overrides these.
+kafka_target: cp
+cp_placement: same_cec
+cp_authorizer: rbac
+
+cp_target: "{{ kafka_target == 'cp' }}"
+zos_kafka_ssl_dir: "{{ connect_config_dir }}/ssl"
+zos_kafka_keystore_path: "{{ zos_kafka_ssl_dir }}/kafka-client.p12"
+
+# Client security, one map per target, written out for every client prefix
+# (worker, producer., consumer., and the connectors' confluent.topic. license
+# client). Two top-level maps, not one nested map: Ansible renders a whole value
+# when it is read, so a nested map would pull in the other target's undefined
+# vault variables. The keystore password doubles as the key password: Kafka
+# falls back to it when ssl.key.password is unset (DefaultSslEngineFactory).
+kafka_security_cp:
+  security.protocol: SSL
+  ssl.keystore.type: PKCS12
+  ssl.keystore.location: "{{ zos_kafka_keystore_path }}"
+  ssl.keystore.password: "{{ kafka_keystore_password }}"
+  ssl.endpoint.identification.algorithm: https
+kafka_security_cc:
+  security.protocol: SASL_SSL
+  sasl.mechanism: PLAIN
+  sasl.jaas.config: "{{ kafka_sasl_jaas_config }}"
+  ssl.endpoint.identification.algorithm: https
+kafka_client_security: "{{ kafka_security_cp if (cp_target | bool) else kafka_security_cc }}"
+confluent_topic_security: >-
+  {{ dict(kafka_client_security.keys() | map('regex_replace', '^', 'confluent.topic.')
+     | zip(kafka_client_security.values() | map('string'))) }}
+
 # --- Switches ----------------------------------------------------------------------
 mq_sink_enabled: "{{ (mq_sink_connector_zip | default('')) | length > 0 }}"
 racf_keyring_enabled: "{{ tls_truststore == 'racf_keyring' }}"
