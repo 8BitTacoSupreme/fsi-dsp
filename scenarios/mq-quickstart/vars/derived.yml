@@ -125,8 +125,23 @@ health_log_patterns:
   - pattern: "MQRC_|MQJE[0-9]|JMSWMQ[0-9]"
     hint: "IBM MQ error: queue manager / queue names, or RACF access to the queue"
   - pattern: "SaslAuthenticationException|Authentication failed"
-    hint: "Kafka API key or secret rejected"
+    hint: "Confluent Cloud API key or secret rejected"
   - pattern: "SSLHandshakeException|PKIX path"
     hint: "TLS trust: keyring contents, LISTRING permit, or tls_truststore choice"
+  # Kafka 4.1 NetworkClient wording ("Node", older releases "Broker").
+  - pattern: "could not be established\\. (Node|Broker) may not be available"
+    hint: >-
+      a broker is unreachable: on Confluent Platform the advertised listener must
+      resolve and route over the cp_placement path (contract item 1)
+  - pattern: "No subject alternative"
+    hint: "broker certificate SANs do not cover the name or address used (contract item 1)"
+  - pattern: "SslAuthenticationException|failed authentication due to"
+    hint: >-
+      the broker rejected the TLS client: the keystore's certificate is not signed
+      by a CA the brokers trust, or does not map to kafka_client_principal (contract item 3)
+  - pattern: "AuthorizationException"
+    hint: >-
+      Kafka authorization: apply out/<host>/kafka/kafka-access.sh (Confluent Platform)
+      or grant the Confluent Cloud service account its ACLs
   - pattern: "FSUM[0-9]|EDC5[0-9]"
     hint: "z/OS UNIX shell or file error: shebang, encoding tag, or permissions"

@@ -56,9 +56,12 @@ See [ADR-012](docs/adr/012-database-connector-patterns.md),
 Kafka Connect on Z: the worker runs as a z/OS started task, dispatched on zIIP,
 next to the queue manager, so the IBM MQ source and sink connectors use
 bindings mode (cross-memory, no channel). An Ansible playbook on
-`ibm.ibm_zos_core` with one inputs file and a preflight. RACF and PROCLIB jobs
-are generated and staged for the security team and systems programmer, never
-submitted. The LinuxONE / client-mode path is [ADR-009](docs/adr/009-linuxone-kafka-offload.md).
+`ibm.ibm_zos_core` with one inputs file and a preflight. It emits to Confluent
+Platform over mTLS by default, with the brokers on Linux on Z in the same CEC,
+an adjacent LinuxONE, or distributed on-prem. Confluent Cloud over SASL_SSL is
+the alternative. RACF and PROCLIB jobs, and on Confluent Platform the Kafka
+RBAC/ACL script, are generated for the security team, systems programmer and
+Kafka platform team, never submitted. The LinuxONE / client-mode path is [ADR-009](docs/adr/009-linuxone-kafka-offload.md).
 
 ## Accelerators
 

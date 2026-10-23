@@ -517,7 +517,7 @@ capabilities:
     type: scenario
     name: "mq-quickstart"
     path: "scenarios/mq-quickstart"
-    description: "Kafka Connect on Z (zIIP) with the IBM MQ source/sink connectors in bindings mode, automated on ibm.ibm_zos_core: one inputs file, an SSH preflight, and a build-time lint for the original quickstart's defects. RACF (STARTED profile, key ring) and PROCLIB jobs are generated and staged, never submitted. Confluent's certified 8.1.0 z/OS build; at-least-once (z/OS MQ source 12.1.1). The LinuxONE/client-mode path is ADR-009."
+    description: "Kafka Connect on Z (zIIP) with the IBM MQ source/sink connectors in bindings mode, automated on ibm.ibm_zos_core: one inputs file, an SSH preflight, and a build-time lint for the original quickstart's defects. Emits to Confluent Platform over mTLS (default; Linux on Z in the same CEC, an adjacent LinuxONE, or distributed on-prem) or to Confluent Cloud over SASL_SSL. RACF (STARTED profile, key ring) and PROCLIB jobs, and on Confluent Platform the Kafka RBAC/ACL script, are generated and staged, never submitted. Confluent's certified 8.1.0 z/OS build; at-least-once (z/OS MQ source 12.1.1). The LinuxONE/client-mode path is ADR-009."
 
   # ── References (1 — new from ADR-012) ──
   - id: "reference/cockroachdb"
