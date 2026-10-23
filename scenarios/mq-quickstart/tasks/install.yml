@@ -10,6 +10,7 @@
 #   connect.env (STDENV)              IBM-1047: BPXBATCH ends records at X'15'
 #   start-connect.sh                  IBM-1047, read by z/OS bash
 #   connect-log4j2.yaml               ISO8859-1: read as bytes by log4j2 in the JVM
+#   ssl/kafka-client.p12 (CP only)    binary, tagged binary, 0600
 # =============================================================================
 
 - name: Create the z/OS UNIX layout
@@ -153,3 +154,43 @@
       mode: "0640"
   loop_control:
     label: "{{ item.name }} -> {{ item.encoding }}"
+
+# --- Confluent Platform: the mTLS client keystore -----------------------------------
+# Kafka opens ssl.keystore.location as a plain file (DefaultSslEngineFactory), so
+# the key cannot stay in a RACF key ring: it lands here, readable by the started
+# task's user only. The playbook environment's FILETAG(AUTOTAG) could tag it as
+# text, so it is tagged binary explicitly and the tag is checked.
+- name: Install the client keystore
+  when: cp_target | bool
+  block:
+    - name: Create the keystore directory (owner only)
+      ansible.builtin.file:
+        path: "{{ zos_kafka_ssl_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Transfer the PKCS12 keystore in binary
+      ibm.ibm_zos_core.zos_copy:
+        src: "{{ kafka_client_keystore }}"
+        dest: "{{ zos_kafka_keystore_path }}"
+        binary: true
+        mode: "0600"
+        replace: true
+
+    - name: Tag the keystore binary  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: chtag -b {{ zos_kafka_keystore_path | quote }}
+      changed_when: true
+
+    - name: Read the keystore tag
+      ansible.builtin.command:
+        cmd: ls -T {{ zos_kafka_keystore_path | quote }}
+      register: _keystore_tag
+      changed_when: false
+
+    - name: Assert the keystore is tagged binary, not text
+      ansible.builtin.assert:
+        that:
+          - _keystore_tag.stdout is search('^b\s+binary')
+          - "'T=off' in _keystore_tag.stdout"
+        fail_msg: "{{ zos_kafka_keystore_path }} is not tagged binary: {{ _keystore_tag.stdout }}"

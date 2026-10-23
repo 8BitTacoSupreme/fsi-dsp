@@ -1,6 +1,7 @@
 """preflight.sh against a fake z/OS: the good image passes, and each broken
 prerequisite fails with its own [FAIL] line and exit 1 -- including answers it
 cannot parse, which must never count as a pass."""
+import json
 import os
 import shutil
 import stat
@@ -8,9 +9,11 @@ import subprocess
 
 import pytest
 
-from conftest import FIXTURES, SCENARIO, build_fake_archives
+from conftest import FIXTURES, SCENARIO, build_fake_archives, fake_keystore, run_site
 
 GOOD = FIXTURES / "zos" / "good"
+CP_BROKERS = "kafka-0.cp.test:9093,kafka-1.cp.test:9093"
+CC_BROKER = "pkc-test1.us-east-1.aws.confluent.cloud:9092"
 
 
 @pytest.fixture
@@ -23,15 +26,20 @@ def zos(tmp_path):
 
 @pytest.fixture(scope="module")
 def archives(tmp_path_factory):
-    return build_fake_archives(tmp_path_factory.mktemp("dl"))
+    dl = tmp_path_factory.mktemp("dl")
+    return build_fake_archives(dl) + (fake_keystore(dl),)
+
+
+def fake_ssh_path():
+    fake_bin = FIXTURES / "bin"
+    os.chmod(fake_bin / "ssh", os.stat(fake_bin / "ssh").st_mode | stat.S_IXUSR)
+    return "%s:%s" % (fake_bin, os.environ["PATH"])
 
 
 def run(zos_dir, archives, **overrides):
-    fake_bin = FIXTURES / "bin"
-    os.chmod(fake_bin / "ssh", os.stat(fake_bin / "ssh").st_mode | stat.S_IXUSR)
-    tarball, connector = archives
+    tarball, connector, keystore = archives
     env = {
-        "PATH": "%s:%s" % (fake_bin, os.environ["PATH"]),
+        "PATH": fake_ssh_path(),
         "FAKE_ZOS_DIR": str(zos_dir),
         "ZOS_HOST": "zos-test.example.com", "ZOS_USER": "KAFUSER",
         "ZOS_PYZ": "/usr/lpp/IBM/cyp/v3r12/pyz", "ZOS_ZOAU": "/usr/lpp/IBM/zoautil",
@@ -39,7 +47,8 @@ def run(zos_dir, archives, **overrides):
         "INSTALL_DIR": "/u/kafconn", "MIN_FREE_KB": "5242880",
         "MQ_INSTALL_PATH": "/usr/lpp/mqm/V9R4M0", "MQ_HLQ": "MQM.V9R4M0",
         "MQ_JARS": "com.ibm.mq.allclient.jar",
-        "KAFKA_BOOTSTRAP": "pkc-test1.us-east-1.aws.confluent.cloud:9092",
+        "KAFKA_TARGET": "cp", "CP_PLACEMENT": "same_cec",
+        "KAFKA_BOOTSTRAP": CP_BROKERS, "KAFKA_CLIENT_KEYSTORE": str(keystore),
         "CONNECT_TARBALL": str(tarball), "CONNECT_TOPDIR": "confluent-connect-zos",
         "CONNECTOR_ZIPS": str(connector), "ZIIP_CONFIRMED": "no",
     }
@@ -57,11 +66,45 @@ def test_good_image_passes_every_check(zos, archives):
     proc, lines = run(zos, archives)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     oks = [line for line in lines if line.startswith("[ ok ]")]
-    # 3 controller tools + tarball + zip + ssh + 13 remote answers (2 MQ data sets)
-    assert len(oks) == 18, "\n".join(lines)
-    assert "=== Result: 18 ok, 0 fail, 0 warn ===" in lines
+    # 3 controller tools + tarball + zip + keystore + ssh + 13 remote answers (2 MQ data sets)
+    assert len(oks) == 19, "\n".join(lines)
+    assert "=== Result: 19 ok, 0 fail, 0 warn ===" in lines
+    assert "Kafka target: cp (same_cec), brokers " + CP_BROKERS in lines
     assert any("z/OS level — V3R1" in line for line in oks)
     assert any("zIIP — 2 online" in line for line in oks)
+    assert any(line.startswith("[ ok ] outbound Kafka — 2 of 2 brokers reachable") for line in oks)
+
+
+def test_cc_target_has_no_keystore_check(zos, archives):
+    (zos / "tcp.out").write_text("OPEN %s\n" % CC_BROKER)
+    proc, lines = run(zos, archives, KAFKA_TARGET="cc", CP_PLACEMENT="", KAFKA_CLIENT_KEYSTORE="",
+                      KAFKA_BOOTSTRAP=CC_BROKER)
+    assert proc.returncode == 0, proc.stdout
+    assert "=== Result: 18 ok, 0 fail, 0 warn ===" in lines
+    assert "Kafka target: cc, brokers " + CC_BROKER in lines
+    assert not any("client keystore" in line for line in lines)
+
+
+@pytest.mark.parametrize("keystore", ["", "absent", "empty"])
+def test_cp_without_a_usable_keystore_fails(zos, archives, tmp_path, keystore):
+    path = {"": "", "absent": str(tmp_path / "absent.p12"), "empty": str(tmp_path / "empty.p12")}[keystore]
+    if keystore == "empty":
+        (tmp_path / "empty.p12").write_bytes(b"")
+    proc, lines = run(zos, archives, KAFKA_CLIENT_KEYSTORE=path)
+    assert proc.returncode == 1, proc.stdout
+    assert len(fails(lines)) == 1
+    assert fails(lines)[0].startswith("[FAIL] client keystore — ")
+    assert "contract, item 3" in fails(lines)[0]
+
+
+def test_every_broker_is_tested_not_just_the_first(zos, archives):
+    (zos / "tcp.out").write_text("OPEN kafka-0.cp.test:9093\nCLOSED kafka-1.cp.test:9093\n")
+    proc, lines = run(zos, archives)
+    assert proc.returncode == 1, proc.stdout
+    assert len(fails(lines)) == 1
+    assert fails(lines)[0].startswith("[FAIL] outbound Kafka — kafka-1.cp.test:9093 not reachable")
+    tcp_call = [c for c in (zos / "calls.log").read_text().splitlines() if c.startswith(": check=tcp;")]
+    assert len(tcp_call) == 1 and tcp_call[0].endswith(" kafka-0.cp.test:9093 kafka-1.cp.test:9093")
 
 
 def test_every_remote_command_is_tagged_and_carries_the_ibm_env(zos, archives):
@@ -89,7 +132,8 @@ BROKEN = [
      "install dir — /u: 10 KB free"),
     ("disk.out", "writable=no\ndir=/u\nFilesystem 1024-blocks Used Available Capacity Mounted on\nOMVS.ROOT 1 1 99999999 1% /u\n",
      "install dir — /u (for /u/kafconn) is not writable"),
-    ("tcp.out", None, "outbound Kafka — pkc-test1.us-east-1.aws.confluent.cloud:9092 not reachable"),
+    ("tcp.out", None, "outbound Kafka — kafka-0.cp.test:9093 kafka-1.cp.test:9093 not reachable"),
+    ("tcp.out", "OPEN\n", "outbound Kafka — kafka-0.cp.test:9093 kafka-1.cp.test:9093 not reachable"),  # no per-broker answer
     ("ziip.out", "IEE174I 14.32.07 DISPLAY M 543\n0000   +   0000-0001  H   FC00  +N\n", "zIIP — D M=CPU shows no online zIIP"),
     ("ziip.out", None, "zIIP — UNVERIFIABLE"),
     ("bash.out", None, "bash — /usr/lpp/IBM/foz/v1r1/bin/bash missing"),
@@ -139,3 +183,21 @@ def test_missing_input_is_a_usage_error(zos, archives):
     proc, _lines = run(zos, archives, ZOS_HOST="")
     assert proc.returncode == 2
     assert "missing: ZOS_HOST" in proc.stderr
+
+
+@pytest.mark.parametrize("target", ["cp", "cc"])
+def test_site_preflight_play_renders_its_environment(tmp_path, target):
+    """The preflight play's environment block is rendered on every run (the
+    play is tagged always), so it must not read the other target's inputs."""
+    zos_dir = tmp_path / "zos"
+    shutil.copytree(GOOD, zos_dir)
+    extra, want = [], "Kafka target: cp (same_cec), brokers " + CP_BROKERS
+    if target == "cc":
+        (zos_dir / "tcp.out").write_text("OPEN %s\n" % CC_BROKER)
+        extra = [json.dumps({"kafka_target": "cc", "kafka_bootstrap": CC_BROKER,
+                             "kafka_client_keystore": "{{ undefined_cp_only_input }}"})]
+        want = "Kafka target: cc, brokers " + CC_BROKER
+    proc, _out = run_site(tmp_path, *extra, tags="preflight", skip_tags="",
+                          env={"PATH": fake_ssh_path(), "FAKE_ZOS_DIR": str(zos_dir)})
+    assert proc.returncode == 0, proc.stdout[-4000:]
+    assert want in proc.stdout
