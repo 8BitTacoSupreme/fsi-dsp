@@ -17,6 +17,9 @@
 #   MQ_INSTALL_PATH MQ_HLQ MQ_JARS KAFKA_BOOTSTRAP CONNECT_TARBALL
 #   CONNECT_TOPDIR CONNECTOR_ZIPS
 #   optional: ZOS_SSH_PORT ZOS_SSH_KEY ZOS_CODESET MIN_FREE_KB ZIIP_CONFIRMED
+#             KAFKA_TARGET (cp, the default, or cc) CP_PLACEMENT
+#             KAFKA_CLIENT_KEYSTORE (checked when KAFKA_TARGET=cp)
+# The build play validates the target choices; preflight only reports them.
 #
 # Exit: 0 all checks pass (WARNs allowed), 1 any FAIL, 2 usage.
 # Every unparseable answer is a FAIL. Preflight never passes what it could not read.
@@ -40,6 +43,10 @@ ZOS_SSH_KEY="${ZOS_SSH_KEY:-}"
 ZOS_CODESET="${ZOS_CODESET:-IBM-1047}"
 MIN_FREE_KB="${MIN_FREE_KB:-5242880}"
 ZIIP_CONFIRMED="${ZIIP_CONFIRMED:-no}"
+KAFKA_TARGET="${KAFKA_TARGET:-cp}"
+CP_PLACEMENT="${CP_PLACEMENT:-}"
+KAFKA_CLIENT_KEYSTORE="${KAFKA_CLIENT_KEYSTORE:-}"
+BROKERS="${KAFKA_BOOTSTRAP//,/ }"
 ZOS_MIN="2.5"        # ibm.ibm_zos_core 2.1 supports z/OS V2R5-V3Rx
 JAVA_MIN_MAJOR="17"  # Connect in CP 8.x requires Java 17+
 PY_MIN="3.12"        # ZOAU 1.4 requires IBM Python 3.12+
@@ -84,6 +91,11 @@ zos() {
 }
 
 echo "mq-quickstart preflight: ${ZOS_USER}@${ZOS_HOST}:${ZOS_SSH_PORT}"
+if [[ "${KAFKA_TARGET}" == "cp" ]]; then
+  echo "Kafka target: cp (${CP_PLACEMENT:-placement unset}), brokers ${KAFKA_BOOTSTRAP}"
+else
+  echo "Kafka target: ${KAFKA_TARGET}, brokers ${KAFKA_BOOTSTRAP}"
+fi
 echo
 
 # --- Controller ------------------------------------------------------------------
@@ -128,6 +140,15 @@ for zip in ${CONNECTOR_ZIPS}; do
     fail "connector zip" "$(basename "${zip}") has no <plugin>/lib/*.jar; not a Connect plugin archive"
   fi
 done
+
+# Confluent Platform: the mTLS client keystore travels from the controller.
+if [[ "${KAFKA_TARGET}" == "cp" ]]; then
+  if [[ -f "${KAFKA_CLIENT_KEYSTORE}" && -r "${KAFKA_CLIENT_KEYSTORE}" && -s "${KAFKA_CLIENT_KEYSTORE}" ]]; then
+    ok "client keystore" "$(basename "${KAFKA_CLIENT_KEYSTORE}") present for the mTLS listener"
+  else
+    fail "client keystore" "${KAFKA_CLIENT_KEYSTORE:-kafka_client_keystore unset} missing, unreadable or empty; the Kafka platform team issues it (inputs.yml contract, item 3)"
+  fi
+fi
 
 # --- z/OS ----------------------------------------------------------------------------
 if ! out=$(zos ssh 'echo ok') || [[ "${out}" != *ok* ]]; then
@@ -250,15 +271,21 @@ else
     fail "install dir" "check failed: ${out:0:80}"
   fi
 
-  # Outbound to the first bootstrap server, from z/OS (the firewall ticket)
-  first=${KAFKA_BOOTSTRAP%%,*}
-  host=${first%:*}
-  port=${first##*:}
-  tcp_cmd="${ZOS_PYZ}/bin/python3 -c 'import socket,sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), 10)' ${host} ${port} && echo OPEN"
-  if out=$(zos tcp "${tcp_cmd}") && [[ "${out}" == *OPEN* ]]; then
-    ok "outbound Kafka" "${host}:${port} reachable from z/OS"
+  # Outbound to every bootstrap broker, from z/OS (the network ticket). One call:
+  # the one-liner answers "OPEN host:port" or "CLOSED host:port" per broker. A
+  # broker without its own OPEN line (no answer, a traceback) is unreachable.
+  tcp_py="import socket,sys;socket.setdefaulttimeout(10);[print((\"OPEN \" if socket.socket().connect_ex((a.rpartition(\":\")[0],int(a.rpartition(\":\")[2])))==0 else \"CLOSED \")+a) for a in sys.argv[1:]]"
+  out=$(zos tcp "${ZOS_PYZ}/bin/python3 -c '${tcp_py}' ${BROKERS}") || true
+  unreachable=""
+  n_brokers=0
+  for broker in ${BROKERS}; do
+    n_brokers=$((n_brokers + 1))
+    grep -qxF "OPEN ${broker}" <<<"${out}" || unreachable="${unreachable} ${broker}"
+  done
+  if [[ -z "${unreachable}" ]]; then
+    ok "outbound Kafka" "${n_brokers} of ${n_brokers} brokers reachable from z/OS"
   else
-    fail "outbound Kafka" "${host}:${port} not reachable from z/OS; network ticket for outbound ${port}"
+    fail "outbound Kafka" "${unreachable# } not reachable from z/OS; network ticket: this LPAR to each broker (see the approval gates)"
   fi
 
   # zIIP: the premise of the scenario. Checked, never changed (sysprog/licensing decision).

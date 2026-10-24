@@ -69,9 +69,20 @@ def build_fake_archives(dest):
     return tarball, connector
 
 
-def run_build(workdir, *extra_vars):
-    """Run the build play against the test inventory. Returns (proc, out_dir)."""
+def fake_keystore(dest):
+    """Stand-in for the PKCS12 the Kafka platform team issues. Written per test
+    instead of committed: secret scanners flag any .p12 in the tree."""
+    dest.mkdir(parents=True, exist_ok=True)
+    keystore = dest / "kafka-client.p12"
+    keystore.write_bytes(b"\x30\x82" + bytes(range(64)))
+    return keystore
+
+
+def run_site(workdir, *extra_vars, tags="build", skip_tags="preflight", env=None):
+    """Run site.yml against the test inventory with fake archives and keystore.
+    Returns (proc, out_dir)."""
     tarball, connector = build_fake_archives(workdir / "downloads")
+    keystore = fake_keystore(workdir / "downloads")
     playbook = Path(sys.executable).parent / "ansible-playbook"
     cmd = [
         str(playbook), "site.yml",
@@ -79,14 +90,22 @@ def run_build(workdir, *extra_vars):
         "-e", "@tests/fixtures/inputs.test.yml",
         "-e", "connect_tarball=%s" % tarball,
         "-e", "mq_source_connector_zip=%s" % connector,
+        "-e", "kafka_client_keystore=%s" % keystore,
         "-e", "out_root=%s" % workdir,
-        "--tags", "build", "--skip-tags", "preflight",
+        "--tags", tags,
     ]
+    if skip_tags:
+        cmd += ["--skip-tags", skip_tags]
     for ev in extra_vars:
         cmd += ["-e", ev]
-    env = dict(os.environ, ANSIBLE_NOCOLOR="1", ANSIBLE_STDOUT_CALLBACK="default")
-    proc = subprocess.run(cmd, cwd=SCENARIO, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    run_env = dict(os.environ, ANSIBLE_NOCOLOR="1", ANSIBLE_STDOUT_CALLBACK="default", **(env or {}))
+    proc = subprocess.run(cmd, cwd=SCENARIO, env=run_env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     return proc, workdir / "out" / "zos-test"
+
+
+def run_build(workdir, *extra_vars):
+    """Run the build play only (no preflight). Returns (proc, out_dir)."""
+    return run_site(workdir, *extra_vars)
 
 
 @pytest.fixture(scope="session")

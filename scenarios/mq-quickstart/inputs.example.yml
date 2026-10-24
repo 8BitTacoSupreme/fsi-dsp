@@ -4,9 +4,10 @@
 # =============================================================================
 # Copy to inputs.yml (gitignored). Secrets go in an Ansible Vault file:
 #   ansible-vault create vault.yml
-#     vault_kafka_api_key: ...
-#     vault_kafka_api_secret: ...
-#     vault_confluent_license: ...     # premium z/OS connectors need a subscription
+#     vault_kafka_keystore_password: ...   # kafka_target: cp
+#     vault_kafka_api_key: ...             # kafka_target: cc
+#     vault_kafka_api_secret: ...          # kafka_target: cc
+#     vault_confluent_license: ...         # premium z/OS connectors need a subscription
 #
 # Every <PLACEHOLDER_...> must be replaced; the build play refuses to run
 # while one is left.
@@ -69,11 +70,51 @@ mq_client_jars:
 mq_source_queue: <PLACEHOLDER_SOURCE_QUEUE>
 mq_sink_queue: ""
 
-# --- Kafka: Confluent Cloud --------------------------------------------------------
-kafka_bootstrap: <PLACEHOLDER_CLUSTER>.confluent.cloud:9092
+# --- Kafka target ------------------------------------------------------------------
+# cp: Confluent Platform over mTLS (the primary target).
+# cc: Confluent Cloud over SASL_SSL with an API key.
+kafka_target: cp
+# Where the CP brokers run, as seen from this LPAR. It changes the network
+# ticket and the README guidance, not the worker config:
+#   same_cec     Linux on Z (LPAR or z/VM guest) in this CEC
+#   linuxone     an adjacent LinuxONE
+#   distributed  on-prem x86/ARM
+# On s390x (same_cec, linuxone) CP needs 8.2.0 or later and IBM's Linux on Z
+# entitlement, and has no FIPS mode or IPv6 (Confluent's s390x support list).
+cp_placement: same_cec
+# Every broker the LPAR must reach, comma-separated; preflight tests each one.
+#   cp: the mTLS listener, e.g. kafka-0.example.internal:9093,kafka-1...:9093
+#   cc: <cluster>.<region>.<cloud>.confluent.cloud:9092
+kafka_bootstrap: <PLACEHOLDER_BROKER>:9093
+confluent_license: "{{ vault_confluent_license | default('') }}"
+
+# --- Confluent Platform: EXTERNAL DEPENDENCY, owned by the Kafka platform team ------
+# THE CONTRACT WITH THAT TEAM (kafka_target: cp). Confirm all six before the start run:
+#   1. An mTLS listener advertised on addresses this LPAR reaches over the
+#      cp_placement path, with broker certificate SANs covering those names.
+#   2. The PEM of the CA that signs the broker certificates (racf_ca_pem below).
+#   3. A PKCS12 client keystore whose certificate maps to kafka_client_principal
+#      under the brokers' ssl.principal.mapping.rules (fsi-dsp cp_mtls issues
+#      <client_cn>.keystore.p12).
+#   4. out/<host>/kafka/kafka-access.sh applied (generated; this kit never runs it).
+#   5. mq_source_topic (and mq_sink_topic) created at RF 3: brokers normally
+#      have auto-create off.
+#   6. At least 3 brokers, for the RF 3 internal and license topics.
+kafka_client_keystore: <PLACEHOLDER_PATH>/kafconn.keystore.p12
+# One password: Kafka uses the store password for the key when no key password is set.
+kafka_keystore_password: "{{ vault_kafka_keystore_password }}"
+# The principal the brokers derive from the client certificate, e.g. User:kafconn.
+kafka_client_principal: "User:<PLACEHOLDER_CN>"
+# rbac: confluent iam rbac role bindings (MDS). acls: kafka-acls.
+cp_authorizer: rbac
+# Needed for rbac: `confluent cluster describe --url <MDS>` shows it.
+cp_kafka_cluster_id: <PLACEHOLDER_CLUSTER_ID>
+
+# --- Confluent Cloud (kafka_target: cc) ------------------------------------------------
 kafka_api_key: "{{ vault_kafka_api_key }}"
 kafka_api_secret: "{{ vault_kafka_api_secret }}"
-confluent_license: "{{ vault_confluent_license | default('') }}"
+
+# --- Topics and connectors -----------------------------------------------------------
 # Names the Connect cluster and its three internal topics (-configs, -offsets, -status).
 connect_group_id: zos-connect-kafconn
 # Topic names follow fsi-dsp naming: {domain}.{application}.{version}.{entity}
@@ -93,15 +134,20 @@ connect_rest_port: 8083
 # The z/OS host name other workers and this controller use to reach the API.
 connect_rest_host: <PLACEHOLDER_ZOS_HOSTNAME>
 
-# --- TLS trust for Confluent Cloud ----------------------------------------------------
+# --- TLS trust for the brokers ----------------------------------------------------------
 # racf_keyring: trust via a RACF key ring (the guide's choice; RACFRING job).
-# jvm_default:  the JVM's cacerts, no RACF job.
+# jvm_default:  the JVM's cacerts, no RACF job. A CP cluster signed by a private
+#               CA fails the handshake unless the sysprog adds that CA to cacerts.
+# The ring holds trust only: Kafka loads its client keystore from a file path,
+# so the CP client key is the PKCS12 above, not a RACF key ring.
 tls_truststore: racf_keyring
 racf_keyring: KAFCONN.RING
-racf_ca_label: ISRG Root X1
-# PEM of the CA that signs the cluster certificate. Staged to
+# RACF label for the CA. cp: your choice, e.g. "FSI Kafka Root CA";
+# cc: ISRG Root X1 (Let's Encrypt, which signs the Confluent Cloud endpoints).
+racf_ca_label: <PLACEHOLDER_CA_LABEL>
+# PEM of the CA that signs the broker certificates. Staged to
 # <stage_hlq>.<stc_name>.CACERT for RACDCERT ADD.
-racf_ca_pem: <PLACEHOLDER_PATH>/isrgrootx1.pem
+racf_ca_pem: <PLACEHOLDER_PATH>/kafka-root-ca.pem
 # true when the security team already holds this CA in RACF: RACFRING then
 # connects it to the ring without adding it.
 racf_ca_already_defined: false

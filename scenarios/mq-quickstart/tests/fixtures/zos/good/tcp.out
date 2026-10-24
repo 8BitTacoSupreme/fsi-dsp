@@ -1,1 +1,2 @@
-OPEN
+OPEN kafka-0.cp.test:9093
+OPEN kafka-1.cp.test:9093

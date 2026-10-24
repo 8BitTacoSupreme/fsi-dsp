@@ -1,15 +1,39 @@
 """The build play, run for real against fake archives, must produce files that
 fix the guide's defects -- and must refuse to build when an input would
 reintroduce one."""
+import json
 import re
 import subprocess
 import tarfile
 
+import pytest
+
 from conftest import PLUGIN, TOPDIR, build_fake_archives, run_build
+
+KEYSTORE = "/u/kafconn/config/ssl/kafka-client.p12"
+CLIENT_PREFIXES = ("", "producer.", "consumer.")
+
+# Confluent Cloud run: its own credentials defined, the CP-only inputs made
+# undefined, so the CC path is proven not to read them. One JSON -e because
+# the values hold spaces and quotes.
+CC_TARGET = json.dumps({
+    "kafka_target": "cc",
+    "kafka_bootstrap": "pkc-test1.us-east-1.aws.confluent.cloud:9092",
+    "vault_kafka_api_key": "TESTKEY",
+    "vault_kafka_api_secret": "TESTSECRET",
+    "kafka_client_keystore": "{{ undefined_cp_only_input }}",
+    "kafka_keystore_password": "{{ undefined_cp_only_input }}",
+    "kafka_client_principal": "{{ undefined_cp_only_input }}",
+    "cp_kafka_cluster_id": "{{ undefined_cp_only_input }}",
+})
 
 
 def read(out, rel):
     return (out / rel).read_text()
+
+
+def source_connector(out):
+    return json.loads(read(out, "connectors/mq-zos-source-transaction.json"))
 
 
 def test_proc_runs_bash_under_pgm_within_the_parm_limit(rendered):
@@ -44,9 +68,190 @@ def test_worker_uses_listeners_and_prefixed_security(rendered):
     props = read(rendered, "rendered/connect-distributed.properties").splitlines()
     assert "listeners=http://0.0.0.0:8083" in props
     assert not any(p.startswith(("rest.port", "rest.host.name")) for p in props)
-    for prefix in ("", "producer.", "consumer."):
-        assert prefix + "security.protocol=SASL_SSL" in props
+    assert "bootstrap.servers=kafka-0.cp.test:9093,kafka-1.cp.test:9093" in props
+    # Connect hands producers and consumers only their prefixed settings, so
+    # the mTLS block has to be there three times (Kafka 4.1 Worker).
+    for prefix in CLIENT_PREFIXES:
+        assert prefix + "security.protocol=SSL" in props
+        assert prefix + "ssl.keystore.type=PKCS12" in props
+        assert prefix + "ssl.keystore.location=" + KEYSTORE in props
+        assert prefix + "ssl.keystore.password=TESTKSPW" in props
+        assert prefix + "ssl.endpoint.identification.algorithm=https" in props
+    assert not [p for p in props if "sasl." in p]
     assert "plugin.path=/u/kafconn/plugins" in props
+
+
+def test_cp_license_client_uses_the_same_mtls_identity(rendered):
+    config = source_connector(rendered)
+    assert config["confluent.topic.bootstrap.servers"] == "kafka-0.cp.test:9093,kafka-1.cp.test:9093"
+    assert config["confluent.topic.security.protocol"] == "SSL"
+    assert config["confluent.topic.ssl.keystore.type"] == "PKCS12"
+    assert config["confluent.topic.ssl.keystore.location"] == KEYSTORE
+    assert config["confluent.topic.ssl.keystore.password"] == "TESTKSPW"
+    assert not [k for k in config if "sasl" in k]
+    assert all(isinstance(v, str) for v in config.values())
+
+
+def test_backslash_in_a_secret_survives_properties_parsing(tmp_path):
+    # Java .properties reads "\x" as an escape; the JSON body needs no doubling.
+    proc, out = run_build(tmp_path, json.dumps({"kafka_keystore_password": "pa\\ss"}))
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    props = read(out, "rendered/connect-distributed.properties").splitlines()
+    for prefix in CLIENT_PREFIXES:
+        assert prefix + "ssl.keystore.password=pa\\\\ss" in props
+    assert source_connector(out)["confluent.topic.ssl.keystore.password"] == "pa\\ss"
+
+
+def test_cc_target_keeps_the_api_key_path(tmp_path):
+    proc, out = run_build(tmp_path, CC_TARGET)
+    assert proc.returncode == 0, proc.stdout[-4000:]
+    props = read(out, "rendered/connect-distributed.properties").splitlines()
+    for prefix in CLIENT_PREFIXES:
+        assert prefix + "security.protocol=SASL_SSL" in props
+        assert prefix + "sasl.mechanism=PLAIN" in props
+    assert any(p.startswith("sasl.jaas.config=") and 'username="TESTKEY"' in p for p in props)
+    assert not [p for p in props if "ssl.keystore" in p]
+    config = source_connector(out)
+    assert config["confluent.topic.security.protocol"] == "SASL_SSL"
+    assert 'password="TESTSECRET"' in config["confluent.topic.sasl.jaas.config"]
+    assert not [k for k in config if "keystore" in k]
+
+
+RBAC_BINDINGS = [
+    "bind ResourceOwner Group:zos-connect-kafconn",
+    "bind ResourceOwner Topic:zos-connect-kafconn-configs",
+    "bind ResourceOwner Topic:zos-connect-kafconn-offsets",
+    "bind ResourceOwner Topic:zos-connect-kafconn-status",
+    "bind DeveloperRead Topic:_confluent-command",
+    "bind DeveloperWrite Topic:_confluent-command",
+    "bind DeveloperWrite Topic:payments.mq-bridge.v1.transaction",
+]
+SINK_RBAC = [
+    "bind DeveloperRead Topic:payments.mq-bridge.v1.settlement",
+    "bind DeveloperRead Group:connect-mq-zos-sink-settlement",
+]
+
+
+def script_lines(path):
+    subprocess.run(["bash", "-n", str(path)], check=True)
+    return path.read_text().splitlines()
+
+
+def test_cp_kafka_access_script_is_gated_rbac(rendered):
+    lines = script_lines(rendered / "kafka" / "kafka-access.sh")
+    assert lines[0] == "#!/usr/bin/env bash"
+    assert "# GATED: for the Kafka platform team. This kit never runs it." in lines
+    assert "set -euo pipefail" in lines
+    assert "PRINCIPAL=User:kafconn" in lines and "KAFKA_CLUSTER_ID=TestKafkaCluster0" in lines
+    assert any(line.startswith(': "${MDS_URL:?') for line in lines)
+    for binding in RBAC_BINDINGS:
+        assert binding in lines, binding
+    assert not [line for line in lines if line.startswith("bind ") and line not in RBAC_BINDINGS]
+    assert not [line for line in lines if "kafka-acls" in line]
+
+
+def test_cp_kafka_access_script_covers_the_sink(tmp_path):
+    _tar, zipfile_path = build_fake_archives(tmp_path / "sinkzip")
+    proc, out = run_build(tmp_path, "mq_sink_connector_zip=%s" % zipfile_path)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    lines = script_lines(out / "kafka" / "kafka-access.sh")
+    for binding in RBAC_BINDINGS + SINK_RBAC:
+        assert binding in lines, binding
+
+
+def test_cp_kafka_access_script_in_acl_mode(tmp_path):
+    proc, out = run_build(tmp_path, "cp_authorizer=acls")
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    lines = script_lines(out / "kafka" / "kafka-access.sh")
+    expected = [
+        "acl --operation Read --group zos-connect-kafconn",
+        "acl --operation Create --operation Read --operation Write --topic zos-connect-kafconn-configs",
+        "acl --operation Create --operation Read --operation Write --topic zos-connect-kafconn-offsets",
+        "acl --operation Create --operation Read --operation Write --topic zos-connect-kafconn-status",
+        "acl --operation Describe --operation Read --operation Write --topic _confluent-command",
+        "acl --operation Write --topic payments.mq-bridge.v1.transaction",
+    ]
+    for acl in expected:
+        assert acl in lines, acl
+    assert any(line.startswith(': "${ADMIN_CONFIG:?') for line in lines)
+    assert not [line for line in lines if "confluent iam" in line or line.startswith("bind ")]
+
+
+def test_cc_target_renders_no_kafka_access_and_clears_a_stale_one(tmp_path):
+    proc, out = run_build(tmp_path)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    assert (out / "kafka" / "kafka-access.sh").is_file()
+    proc, out = run_build(tmp_path, CC_TARGET)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    assert not (out / "kafka").exists()
+
+
+@pytest.mark.parametrize("placement,network", [
+    ("same_cec", "SYSPROG   network path inside this CEC (HiperSockets or SMC-D) from the LPAR to "
+                 "kafka-0.cp.test:9093,kafka-1.cp.test:9093 (preflight tested it)"),
+    ("linuxone", "NETWORK   path to the adjacent LinuxONE (SMC-R over RoCE Express, or OSA) from the LPAR to "
+                 "kafka-0.cp.test:9093,kafka-1.cp.test:9093 (preflight tested it)"),
+    ("distributed", "NETWORK   routed path and firewall rules from the LPAR to "
+                    "kafka-0.cp.test:9093,kafka-1.cp.test:9093 (preflight tested it)"),
+])
+def test_gates_name_the_network_path_for_the_placement(tmp_path, placement, network):
+    proc, out = run_build(tmp_path, "cp_placement=" + placement)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    gates = read(out, "gates.txt").splitlines()
+    assert network in gates
+    assert [g for g in gates if g.startswith(("NETWORK", "SYSPROG   network"))] == [
+        network, "NETWORK   inbound TCP 8083 to zos-test.example.com from this controller"]
+    kafka = [g for g in gates if g.startswith("KAFKA")]
+    assert kafka == ["KAFKA     review + apply %s/kafka/kafka-access.sh: rbac for User:kafconn" % out]
+
+
+def test_cc_gates_keep_the_outbound_ticket_only(tmp_path):
+    proc, out = run_build(tmp_path, CC_TARGET)
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    gates = read(out, "gates.txt").splitlines()
+    assert "NETWORK   outbound pkc-test1.us-east-1.aws.confluent.cloud:9092 from the LPAR (preflight tested it)" in gates
+    assert not [g for g in gates if g.startswith("KAFKA") or "HiperSockets" in g]
+
+
+def test_cp_with_jvm_default_trust_gets_a_cacerts_gate(tmp_path):
+    proc, out = run_build(tmp_path, "tls_truststore=jvm_default")
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    gates = read(out, "gates.txt").splitlines()
+    assert ("SYSPROG   add the CA that signs the brokers to /usr/lpp/java/J17.0_64/lib/security/cacerts "
+            "(tls_truststore: jvm_default)") in gates
+    assert not [g for g in gates if "RACFRING" in g]
+
+
+@pytest.mark.parametrize("bad", ["kafka_target=onprem", "cp_placement=mainframe", "cp_authorizer=ldap"])
+def test_unknown_target_choice_stops_the_build(tmp_path, bad):
+    proc, _out = run_build(tmp_path, bad)
+    assert proc.returncode != 0
+    assert bad.split("=")[0] in proc.stdout
+
+
+def test_cp_default_refuses_a_confluent_cloud_bootstrap(tmp_path):
+    # An inputs.yml from before the CP target has no kafka_target and a CC
+    # bootstrap: say what to set instead of failing on a missing keystore.
+    proc, _out = run_build(tmp_path, "kafka_bootstrap=pkc-old.us-east-1.aws.confluent.cloud:9092")
+    assert proc.returncode != 0
+    assert "set kafka_target: cc" in proc.stdout
+
+
+def test_missing_keystore_stops_the_build(tmp_path):
+    proc, _out = run_build(tmp_path, "kafka_client_keystore=%s" % (tmp_path / "absent.p12"))
+    assert proc.returncode != 0
+    assert "kafka_client_keystore" in proc.stdout and "absent.p12" in proc.stdout
+
+
+@pytest.mark.parametrize("placeholder", [
+    "kafka_client_principal=User:<PLACEHOLDER_CN>",
+    "cp_kafka_cluster_id=<PLACEHOLDER_CLUSTER_ID>",
+    "racf_ca_label=<PLACEHOLDER_CA_LABEL>",
+])
+def test_cp_placeholders_stop_the_build(tmp_path, placeholder):
+    proc, _out = run_build(tmp_path, placeholder)
+    assert proc.returncode != 0
+    assert "still has a placeholder: " + placeholder.split("=", 1)[1] in proc.stdout
 
 
 def test_bundle_keeps_exec_bits_shebangs_and_binary_jars(rendered, tmp_path):

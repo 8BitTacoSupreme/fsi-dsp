@@ -38,19 +38,12 @@
     replace: true
   when: racf_ca_stage_needed | bool
 
+# The list lives in vars/derived.yml; the build wrote the same lines to
+# out/<host>/gates.txt.
 - name: Approval gates -- what has to happen before the start run
   ansible.builtin.debug:
-    msg: "{{ _gates | select | list }}"
-  vars:
-    _ring_gate: >-
-      SECURITY  review + submit {{ stage_cntl }}(RACFRING): key ring
-      {{ racf_keyring }} + IRR.DIGTCERT.LISTRING READ
-    _gates:
-      - "SECURITY  review + submit {{ stage_cntl }}(RACFSTC): STARTED {{ stc_name }}.* -> {{ stc_user }}/{{ stc_group }}"
-      - "{{ _ring_gate if (racf_keyring_enabled | bool) else '' }}"
-      - "SYSPROG   review + submit {{ stage_cntl }}(PROCCOPY): {{ stc_name }} into {{ target_proclib }}"
-      - "NETWORK   outbound {{ kafka_bootstrap }} from the LPAR (preflight tested it)"
-      - "NETWORK   inbound TCP {{ connect_rest_port }} to {{ connect_rest_host }} from this controller"
-      - "Copies for the tickets: {{ out_dir }}/jcl/"
-      - "Then re-run with: -e gates_confirmed=true --tags start,register,health"
+    msg: >-
+      {{ approval_gates + [
+           'Copies for the tickets: ' ~ out_dir ~ '/jcl/ and ' ~ out_dir ~ '/gates.txt',
+           'Then re-run with: -e gates_confirmed=true --tags start,register,health'] }}
   when: not (gates_confirmed | default(false) | bool)

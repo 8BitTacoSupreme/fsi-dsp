@@ -43,10 +43,76 @@ kafka_sasl_jaas_config: >-
   org.apache.kafka.common.security.plain.PlainLoginModule required
   username="{{ kafka_api_key }}" password="{{ kafka_api_secret }}";
 
+# Defaults for the target inputs, so an inputs.yml written before the CP target
+# existed reaches the "set kafka_target: cc" assert instead of an undefined
+# variable. inputs.yml (-e) overrides these.
+kafka_target: cp
+cp_placement: same_cec
+cp_authorizer: rbac
+
+cp_target: "{{ kafka_target == 'cp' }}"
+zos_kafka_ssl_dir: "{{ connect_config_dir }}/ssl"
+zos_kafka_keystore_path: "{{ zos_kafka_ssl_dir }}/kafka-client.p12"
+
+# Client security, one map per target, written out for every client prefix
+# (worker, producer., consumer., and the connectors' confluent.topic. license
+# client). Two top-level maps, not one nested map: Ansible renders a whole value
+# when it is read, so a nested map would pull in the other target's undefined
+# vault variables. The keystore password doubles as the key password: Kafka
+# falls back to it when ssl.key.password is unset (DefaultSslEngineFactory).
+kafka_security_cp:
+  security.protocol: SSL
+  ssl.keystore.type: PKCS12
+  ssl.keystore.location: "{{ zos_kafka_keystore_path }}"
+  ssl.keystore.password: "{{ kafka_keystore_password }}"
+  ssl.endpoint.identification.algorithm: https
+kafka_security_cc:
+  security.protocol: SASL_SSL
+  sasl.mechanism: PLAIN
+  sasl.jaas.config: "{{ kafka_sasl_jaas_config }}"
+  ssl.endpoint.identification.algorithm: https
+kafka_client_security: "{{ kafka_security_cp if (cp_target | bool) else kafka_security_cc }}"
+confluent_topic_security: >-
+  {{ dict(kafka_client_security.keys() | map('regex_replace', '^', 'confluent.topic.')
+     | zip(kafka_client_security.values() | map('string'))) }}
+
 # --- Switches ----------------------------------------------------------------------
 mq_sink_enabled: "{{ (mq_sink_connector_zip | default('')) | length > 0 }}"
 racf_keyring_enabled: "{{ tls_truststore == 'racf_keyring' }}"
 racf_ca_stage_needed: "{{ (racf_keyring_enabled | bool) and not (racf_ca_already_defined | bool) }}"
+
+# --- Approval gates: the tickets between run 1 and run 2 ---------------------------
+# One list for both places that show it: out/<host>/gates.txt (build) and the
+# stage play's closing message. cp_placement only changes who owns the network
+# path and what it is; the worker config is the same for all three.
+network_gate_by_placement:
+  same_cec: >-
+    SYSPROG   network path inside this CEC (HiperSockets or SMC-D) from the LPAR
+    to {{ kafka_bootstrap }} (preflight tested it)
+  linuxone: >-
+    NETWORK   path to the adjacent LinuxONE (SMC-R over RoCE Express, or OSA) from
+    the LPAR to {{ kafka_bootstrap }} (preflight tested it)
+  distributed: >-
+    NETWORK   routed path and firewall rules from the LPAR to {{ kafka_bootstrap }}
+    (preflight tested it)
+approval_gates_all:
+  - "SECURITY  review + submit {{ stage_cntl }}(RACFSTC): STARTED {{ stc_name }}.* -> {{ stc_user }}/{{ stc_group }}"
+  - >-
+    {{ ('SECURITY  review + submit ' ~ stage_cntl ~ '(RACFRING): key ring ' ~ racf_keyring
+    ~ ' + IRR.DIGTCERT.LISTRING READ') if (racf_keyring_enabled | bool) else '' }}
+  - "SYSPROG   review + submit {{ stage_cntl }}(PROCCOPY): {{ stc_name }} into {{ target_proclib }}"
+  - >-
+    {{ network_gate_by_placement[cp_placement] if (cp_target | bool)
+    else 'NETWORK   outbound ' ~ kafka_bootstrap ~ ' from the LPAR (preflight tested it)' }}
+  - >-
+    {{ ('KAFKA     review + apply ' ~ out_dir ~ '/kafka/kafka-access.sh: ' ~ cp_authorizer
+    ~ ' for ' ~ kafka_client_principal) if (cp_target | bool) else '' }}
+  - >-
+    {{ ('SYSPROG   add the CA that signs the brokers to ' ~ zos_java_home
+    ~ '/lib/security/cacerts (tls_truststore: jvm_default)')
+    if ((cp_target | bool) and not (racf_keyring_enabled | bool)) else '' }}
+  - "NETWORK   inbound TCP {{ connect_rest_port }} to {{ connect_rest_host }} from this controller"
+approval_gates: "{{ approval_gates_all | select | list }}"
 
 # --- Health: log signatures of the failures that eat install time ------------------
 health_log_patterns:
@@ -59,8 +125,23 @@ health_log_patterns:
   - pattern: "MQRC_|MQJE[0-9]|JMSWMQ[0-9]"
     hint: "IBM MQ error: queue manager / queue names, or RACF access to the queue"
   - pattern: "SaslAuthenticationException|Authentication failed"
-    hint: "Kafka API key or secret rejected"
+    hint: "Confluent Cloud API key or secret rejected"
   - pattern: "SSLHandshakeException|PKIX path"
     hint: "TLS trust: keyring contents, LISTRING permit, or tls_truststore choice"
+  # Kafka 4.1 NetworkClient wording ("Node", older releases "Broker").
+  - pattern: "could not be established\\. (Node|Broker) may not be available"
+    hint: >-
+      a broker is unreachable: on Confluent Platform the advertised listener must
+      resolve and route over the cp_placement path (contract item 1)
+  - pattern: "No subject alternative"
+    hint: "broker certificate SANs do not cover the name or address used (contract item 1)"
+  - pattern: "SslAuthenticationException|failed authentication due to"
+    hint: >-
+      the broker rejected the TLS client: the keystore's certificate is not signed
+      by a CA the brokers trust, or does not map to kafka_client_principal (contract item 3)
+  - pattern: "AuthorizationException"
+    hint: >-
+      Kafka authorization: apply out/<host>/kafka/kafka-access.sh (Confluent Platform)
+      or grant the Confluent Cloud service account its ACLs
   - pattern: "FSUM[0-9]|EDC5[0-9]"
     hint: "z/OS UNIX shell or file error: shebang, encoding tag, or permissions"

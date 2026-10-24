@@ -7,6 +7,20 @@
 # caught in seconds instead of at S time.
 # =============================================================================
 
+# First, so an inputs.yml from before the CP target (no kafka_target, a CC
+# bootstrap, no keystore) gets told what to set instead of an undefined variable.
+- name: Assert the Kafka target matches its inputs
+  ansible.builtin.assert:
+    that:
+      - kafka_target in ['cp', 'cc']
+      - (not (cp_target | bool)) or ('confluent.cloud' not in kafka_bootstrap)
+      - (not (cp_target | bool)) or (kafka_client_keystore is defined)
+    fail_msg: >-
+      kafka_target={{ kafka_target }}, kafka_bootstrap={{ kafka_bootstrap }}.
+      kafka_target must be cp (Confluent Platform over mTLS, the default) or cc
+      (Confluent Cloud). A cp target needs kafka_client_keystore and a Confluent
+      Platform bootstrap; for Confluent Cloud, set kafka_target: cc.
+
 - name: Assert inputs.yml has no placeholders left
   ansible.builtin.assert:
     that:
@@ -24,6 +38,10 @@
     - "{{ mq_source_connector_name }}"
     - "{{ (mq_sink_queue ~ mq_sink_topic ~ mq_sink_connector_name) if (mq_sink_enabled | bool) else '' }}"
     - "{{ racf_ca_pem if (racf_ca_stage_needed | bool) else '' }}"
+    - "{{ racf_ca_label if (racf_keyring_enabled | bool) else '' }}"
+    - "{{ kafka_client_keystore if (cp_target | bool) else '' }}"
+    - "{{ kafka_client_principal if (cp_target | bool) else '' }}"
+    - "{{ cp_kafka_cluster_id if ((cp_target | bool) and cp_authorizer == 'rbac') else '' }}"
 
 - name: Assert the choices are ones the kit implements
   ansible.builtin.assert:
@@ -31,9 +49,30 @@
       - tls_truststore in ['racf_keyring', 'jvm_default']
       - connect_props_encoding in ['IBM-1047', 'ISO8859-1']
       - (not (mq_sink_enabled | bool)) or (mq_sink_queue | length > 0 and mq_sink_topic | length > 0)
+      - (not (cp_target | bool)) or cp_placement in ['same_cec', 'linuxone', 'distributed']
+      - (not (cp_target | bool)) or cp_authorizer in ['rbac', 'acls']
     fail_msg: >-
       tls_truststore must be racf_keyring or jvm_default; connect_props_encoding
-      IBM-1047 or ISO8859-1; an enabled sink needs mq_sink_queue and mq_sink_topic.
+      IBM-1047 or ISO8859-1; an enabled sink needs mq_sink_queue and mq_sink_topic;
+      with kafka_target cp, cp_placement must be same_cec, linuxone or distributed
+      and cp_authorizer rbac or acls.
+
+- name: Check the client keystore the Kafka platform team issued
+  ansible.builtin.stat:
+    path: "{{ kafka_client_keystore }}"
+  register: _keystore
+  when: cp_target | bool
+
+- name: Assert the client keystore is a readable, non-empty file
+  ansible.builtin.assert:
+    that:
+      - _keystore.stat.exists
+      - _keystore.stat.isreg and _keystore.stat.readable
+      - _keystore.stat.size > 0
+    fail_msg: >-
+      kafka_client_keystore={{ kafka_client_keystore }} is missing, unreadable or
+      empty. The Kafka platform team issues it (inputs.yml contract, item 3).
+  when: cp_target | bool
 
 - name: Assert names fit MVS rules (1-8 characters, national characters allowed)
   ansible.builtin.assert:
@@ -56,7 +95,7 @@
     - "{{ target_proclib }}"
     - "{{ mq_hlq }}.SCSQAUTH"
 
-- name: Create the output tree (0700, rendered files carry the API secret)
+- name: Create the output tree (0700, rendered files carry Kafka credentials)
   ansible.builtin.file:
     path: "{{ out_dir }}/{{ item }}"
     state: directory
@@ -149,6 +188,30 @@
   loop: "{{ mq_connectors }}"
   loop_control:
     label: "{{ item.name }}"
+
+# --- Tickets ------------------------------------------------------------------------
+# Not linted: gates.txt is a reviewer's copy, and kafka-access.sh runs on the
+# Kafka team's admin host, not on z/OS.
+- name: Write the approval gates for the tickets
+  ansible.builtin.template:
+    src: gates.txt.j2
+    dest: "{{ out_dir }}/gates.txt"
+    mode: "0600"
+
+# A Confluent Cloud build removes the directory so a stale CP script cannot be
+# mistaken for this run's output.
+- name: Keep out/<host>/kafka/ for a Confluent Platform target only
+  ansible.builtin.file:
+    path: "{{ out_dir }}/kafka"
+    state: "{{ 'directory' if (cp_target | bool) else 'absent' }}"
+    mode: "0700"
+
+- name: Render the Kafka access script (gated; the Kafka platform team runs it)
+  ansible.builtin.template:
+    src: kafka-access.sh.j2
+    dest: "{{ out_dir }}/kafka/kafka-access.sh"
+    mode: "0600"
+  when: cp_target | bool
 
 # --- Lint ---------------------------------------------------------------------------
 - name: Lint everything z/OS will read

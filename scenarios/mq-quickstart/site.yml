@@ -21,7 +21,9 @@
 #   # run 1: preflight -> build -> install -> stage, stops at the gates
 #   ansible-playbook site.yml -e @inputs.yml -e @vault.yml --ask-vault-pass
 #
-#   # tickets: RACFSTC/RACFRING (security), PROCCOPY (sysprog), firewall (network)
+#   # tickets: RACFSTC/RACFRING (security), PROCCOPY (sysprog), the network
+#   # path to the brokers, and on Confluent Platform kafka-access.sh (Kafka team);
+#   # out/<host>/gates.txt lists them
 #
 #   # run 2: start -> register -> health
 #   ansible-playbook site.yml -e @inputs.yml -e @vault.yml --ask-vault-pass \
@@ -77,6 +79,11 @@
         MQ_HLQ: "{{ mq_hlq }}"
         MQ_JARS: "{{ mq_client_jars | join(' ') }}"
         KAFKA_BOOTSTRAP: "{{ kafka_bootstrap }}"
+        # Rendered on every run (this play is tagged always): read no input the
+        # other Kafka target leaves undefined.
+        KAFKA_TARGET: "{{ kafka_target }}"
+        CP_PLACEMENT: "{{ cp_placement if (cp_target | bool) else '' }}"
+        KAFKA_CLIENT_KEYSTORE: "{{ kafka_client_keystore if (cp_target | bool) else '' }}"
         ZIIP_CONFIRMED: "{{ 'yes' if (preflight_ziip_confirmed | bool) else 'no' }}"
         CONNECT_TARBALL: "{{ connect_tarball }}"
         CONNECT_TOPDIR: "{{ connect_tarball_topdir }}"
