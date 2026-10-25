@@ -6,11 +6,22 @@
 # If FAILED tasks found, restart with POST then re-check with retries.
 # =============================================================================
 
+- name: Resolve Connect REST options
+  ansible.builtin.import_tasks: auth.yml
+
 # Step 1: Initial status check for all connectors
 - name: "Check connector status for {{ connector_item.name }}"
   ansible.builtin.uri:
     url: "{{ cp_connect_url }}/connectors/{{ connector_item.name }}/status"
     method: GET
+    headers: "{{ _cp_connect_auth_headers }}"
+    url_username: "{{ cp_connect_user if (_cp_connect_use_basic | bool) else omit }}"
+    url_password: "{{ cp_connect_password if (_cp_connect_use_basic | bool) else omit }}"
+    force_basic_auth: "{{ _cp_connect_use_basic | bool }}"
+    ca_path: "{{ cp_connect_ca_path if (cp_connect_ca_path | length > 0) else omit }}"
+    client_cert: "{{ cp_connect_client_cert if (cp_connect_client_cert | length > 0) else omit }}"
+    client_key: "{{ cp_connect_client_key if (cp_connect_client_key | length > 0) else omit }}"
+    validate_certs: "{{ cp_connect_validate_certs | bool }}"
     return_content: true
     status_code:
       - 200
@@ -20,12 +31,21 @@
     loop_var: connector_item
     label: "{{ connector_item.name }}"
   failed_when: false
+  no_log: "{{ cp_connect_token | length > 0 }}"
 
 # Step 2: Identify connectors with FAILED tasks and restart them
 - name: "Restart failed tasks for connector {{ connector_item.name }}"
   ansible.builtin.uri:
     url: "{{ cp_connect_url }}/connectors/{{ connector_item.name }}/restart?includeTasks=true&onlyFailed=true"
     method: POST
+    headers: "{{ _cp_connect_auth_headers }}"
+    url_username: "{{ cp_connect_user if (_cp_connect_use_basic | bool) else omit }}"
+    url_password: "{{ cp_connect_password if (_cp_connect_use_basic | bool) else omit }}"
+    force_basic_auth: "{{ _cp_connect_use_basic | bool }}"
+    ca_path: "{{ cp_connect_ca_path if (cp_connect_ca_path | length > 0) else omit }}"
+    client_cert: "{{ cp_connect_client_cert if (cp_connect_client_cert | length > 0) else omit }}"
+    client_key: "{{ cp_connect_client_key if (cp_connect_client_key | length > 0) else omit }}"
+    validate_certs: "{{ cp_connect_validate_certs | bool }}"
     status_code:
       - 200
       - 202
@@ -45,12 +65,21 @@
     | selectattr('state', 'equalto', 'FAILED')
     | list | length > 0
   failed_when: false
+  no_log: "{{ cp_connect_token | length > 0 }}"
 
 # Step 3: Re-check with retries until all healthy
 - name: "Verify connector {{ connector_item.name }} is healthy"
   ansible.builtin.uri:
     url: "{{ cp_connect_url }}/connectors/{{ connector_item.name }}/status"
     method: GET
+    headers: "{{ _cp_connect_auth_headers }}"
+    url_username: "{{ cp_connect_user if (_cp_connect_use_basic | bool) else omit }}"
+    url_password: "{{ cp_connect_password if (_cp_connect_use_basic | bool) else omit }}"
+    force_basic_auth: "{{ _cp_connect_use_basic | bool }}"
+    ca_path: "{{ cp_connect_ca_path if (cp_connect_ca_path | length > 0) else omit }}"
+    client_cert: "{{ cp_connect_client_cert if (cp_connect_client_cert | length > 0) else omit }}"
+    client_key: "{{ cp_connect_client_key if (cp_connect_client_key | length > 0) else omit }}"
+    validate_certs: "{{ cp_connect_validate_certs | bool }}"
     return_content: true
     status_code:
       - 200
@@ -68,6 +97,7 @@
     loop_var: connector_item
     label: "{{ connector_item.name }}"
   failed_when: false
+  no_log: "{{ cp_connect_token | length > 0 }}"
 
 # Step 4: Count healthy and unhealthy connectors
 - name: Count healthy connectors

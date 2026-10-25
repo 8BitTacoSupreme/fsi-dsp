@@ -60,7 +60,7 @@ class TestRoleStructure:
         )
 
     def test_task_files_exist(self):
-        expected = ['main.yml', 'deploy.yml', 'validate.yml', 'check.yml']
+        expected = ['main.yml', 'deploy.yml', 'validate.yml', 'check.yml', 'auth.yml']
         for fname in expected:
             path = os.path.join(TASKS_DIR, fname)
             assert os.path.isfile(path), f"Missing task file: {fname}"
@@ -333,7 +333,7 @@ class TestCpConnectFQCN:
     ]
 
     def test_all_tasks_use_fqcn(self):
-        task_files = ['main.yml', 'deploy.yml', 'validate.yml', 'check.yml']
+        task_files = ['main.yml', 'deploy.yml', 'validate.yml', 'check.yml', 'auth.yml']
         for fname in task_files:
             path = os.path.join(TASKS_DIR, fname)
             if not os.path.isfile(path):
@@ -362,7 +362,7 @@ class TestCpConnectTaskNames:
     """Verify all task names start with uppercase per ansible-lint."""
 
     def test_all_task_names_uppercase(self):
-        task_files = ['main.yml', 'deploy.yml', 'validate.yml', 'check.yml']
+        task_files = ['main.yml', 'deploy.yml', 'validate.yml', 'check.yml', 'auth.yml']
         for fname in task_files:
             path = os.path.join(TASKS_DIR, fname)
             if not os.path.isfile(path):

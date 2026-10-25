@@ -6,23 +6,43 @@
 # desired configs. Uses only GET requests -- never PUT, POST, or DELETE.
 # =============================================================================
 
+- name: Resolve Connect REST options
+  ansible.builtin.import_tasks: auth.yml
+
 # List currently deployed connectors
 - name: List existing connectors
   ansible.builtin.uri:
     url: "{{ cp_connect_url }}/connectors"
     method: GET
+    headers: "{{ _cp_connect_auth_headers }}"
+    url_username: "{{ cp_connect_user if (_cp_connect_use_basic | bool) else omit }}"
+    url_password: "{{ cp_connect_password if (_cp_connect_use_basic | bool) else omit }}"
+    force_basic_auth: "{{ _cp_connect_use_basic | bool }}"
+    ca_path: "{{ cp_connect_ca_path if (cp_connect_ca_path | length > 0) else omit }}"
+    client_cert: "{{ cp_connect_client_cert if (cp_connect_client_cert | length > 0) else omit }}"
+    client_key: "{{ cp_connect_client_key if (cp_connect_client_key | length > 0) else omit }}"
+    validate_certs: "{{ cp_connect_validate_certs | bool }}"
     return_content: true
     status_code:
       - 200
   register: _existing_connectors
   check_mode: false
   changed_when: false
+  no_log: "{{ cp_connect_token | length > 0 }}"
 
 # Retrieve current config for each desired connector
 - name: "Get current config for connector {{ connector_item.name }}"
   ansible.builtin.uri:
     url: "{{ cp_connect_url }}/connectors/{{ connector_item.name }}/config"
     method: GET
+    headers: "{{ _cp_connect_auth_headers }}"
+    url_username: "{{ cp_connect_user if (_cp_connect_use_basic | bool) else omit }}"
+    url_password: "{{ cp_connect_password if (_cp_connect_use_basic | bool) else omit }}"
+    force_basic_auth: "{{ _cp_connect_use_basic | bool }}"
+    ca_path: "{{ cp_connect_ca_path if (cp_connect_ca_path | length > 0) else omit }}"
+    client_cert: "{{ cp_connect_client_cert if (cp_connect_client_cert | length > 0) else omit }}"
+    client_key: "{{ cp_connect_client_key if (cp_connect_client_key | length > 0) else omit }}"
+    validate_certs: "{{ cp_connect_validate_certs | bool }}"
     return_content: true
     status_code:
       - 200
@@ -34,6 +54,7 @@
     label: "{{ connector_item.name }}"
   check_mode: false
   changed_when: false
+  no_log: "{{ cp_connect_token | length > 0 }}"
 
 # Report planned changes
 - name: "Report planned changes for connector {{ item.connector_item.name }}"

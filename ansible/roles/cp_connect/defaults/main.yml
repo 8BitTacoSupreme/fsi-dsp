@@ -10,6 +10,20 @@
 # Connect REST API endpoint
 cp_connect_url: "http://localhost:8083"
 
+# TLS and authentication for the REST API. All off by default, so a plain-HTTP
+# API gets exactly the requests it always did.
+# PEM CA bundle that signs the REST server cert (https://); empty = system trust
+cp_connect_ca_path: ""
+# mTLS client cert and key, PEM. The key must be unencrypted: ansible.builtin.uri
+# has no key-passphrase option.
+cp_connect_client_cert: ""
+cp_connect_client_key: ""
+cp_connect_validate_certs: true
+# HTTP basic (sent pre-emptively) or a bearer token, not both
+cp_connect_user: ""
+cp_connect_password: ""
+cp_connect_token: ""
+
 # List of connector definitions: [{name: "...", config: {...}}, ...]
 cp_connectors: []
 

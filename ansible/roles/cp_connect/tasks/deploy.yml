@@ -6,14 +6,27 @@
 # present (200). This is the canonical idempotent pattern for Connect REST API.
 # =============================================================================
 
+- name: Resolve Connect REST options
+  ansible.builtin.import_tasks: auth.yml
+
+# Retries cover transient answers (no connection, 409 rebalance, 5xx). A
+# deterministic rejection (bad request, auth, not found) stops at once and is
+# reported by the summary task below. ignore_errors keeps the loop going so
+# every connector is attempted and counted.
 - name: "Deploy connector {{ connector_item.name }}"
   ansible.builtin.uri:
     url: "{{ cp_connect_url }}/connectors/{{ connector_item.name }}/config"
     method: PUT
     body: "{{ connector_item.config | to_json }}"
     body_format: json
-    headers:
-      Content-Type: "application/json"
+    headers: "{{ {'Content-Type': 'application/json'} | combine(_cp_connect_auth_headers) }}"
+    url_username: "{{ cp_connect_user if (_cp_connect_use_basic | bool) else omit }}"
+    url_password: "{{ cp_connect_password if (_cp_connect_use_basic | bool) else omit }}"
+    force_basic_auth: "{{ _cp_connect_use_basic | bool }}"
+    ca_path: "{{ cp_connect_ca_path if (cp_connect_ca_path | length > 0) else omit }}"
+    client_cert: "{{ cp_connect_client_cert if (cp_connect_client_cert | length > 0) else omit }}"
+    client_key: "{{ cp_connect_client_key if (cp_connect_client_key | length > 0) else omit }}"
+    validate_certs: "{{ cp_connect_validate_certs | bool }}"
     status_code:
       - 200
       - 201
@@ -21,12 +34,15 @@
   register: _deploy_result
   retries: 3
   delay: 5
-  until: _deploy_result is not failed
+  until: >-
+    _deploy_result is not failed
+    or (_deploy_result.status | default(-1) | int) in [400, 401, 403, 404, 405, 422]
   loop: "{{ cp_connectors }}"
   loop_control:
     loop_var: connector_item
     label: "{{ connector_item.name }}"
-  failed_when: false
+  ignore_errors: true
+  no_log: "{{ cp_connect_token | length > 0 }}"
 
 - name: Count created connectors
   ansible.builtin.set_fact:
@@ -54,3 +70,16 @@
          | selectattr('failed', 'equalto', true)
          | list | length }}
   when: _deploy_result.results is defined
+
+- name: Fail if any connector deployments failed
+  ansible.builtin.fail:
+    msg: >-
+      {{ _connect_failed }} connector deployment(s) failed at {{ cp_connect_url }}:
+      {% for r in _deploy_result.results | selectattr('failed', 'defined') | selectattr('failed') %}
+      {{ r.connector_item.name }} -> HTTP {{ r.status | default(-1) }}:
+      {{ (r.json.message if (r.json is defined and r.json is mapping and 'message' in r.json)
+          else (r.msg | default(''))) | truncate(300) }};
+      {% endfor %}
+  when:
+    - _deploy_result.results is defined
+    - _connect_failed | int > 0
