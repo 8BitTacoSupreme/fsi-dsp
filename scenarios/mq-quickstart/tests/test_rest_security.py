@@ -2,11 +2,15 @@
 default (connect_rest_security: mtls), with its own stores under the
 listeners.https. prefix. Plain HTTP only when inputs.yml asks for it."""
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
 
-from conftest import SCENARIO, run_build
+from conftest import FIXTURES, SCENARIO, run_build
 from test_render import CC_TARGET, read
 
 REST_KEYSTORE = "/u/kafconn/config/ssl/rest-server.p12"
@@ -145,6 +149,48 @@ def test_rest_placeholders_stop_the_build(tmp_path, var):
     proc, _out = run_build(tmp_path, "%s=%s" % (var, value))
     assert proc.returncode != 0
     assert "still has a placeholder: " + value in proc.stdout, proc.stdout[-3000:]
+
+
+STORES_PLAY = """\
+- name: Print zos_binary_stores
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - {derived}
+  tasks:
+    - name: Print it
+      ansible.builtin.debug:
+        msg: "STORES={{{{ zos_binary_stores | to_json }}}}"
+"""
+
+
+@pytest.mark.parametrize("target,rest,dests", [
+    ("cp", "mtls", ["kafka-client.p12", "rest-server.p12", "rest-client-ca.p12"]),
+    ("cp", "http", ["kafka-client.p12"]),
+    ("cc", "mtls", ["rest-server.p12", "rest-client-ca.p12"]),
+    ("cc", "http", []),
+])
+def test_binary_stores_follow_the_target_and_rest_mode(tmp_path, target, rest, dests):
+    # What install copies to z/OS: derived.yml rendered for each combination,
+    # with the inputs a combination does not use left undefined.
+    play = tmp_path / "stores.yml"
+    play.write_text(STORES_PLAY.format(derived=SCENARIO / "vars" / "derived.yml"))
+    extra = {"kafka_target": target, "connect_rest_security": rest,
+             "kafka_client_keystore": "/ctl/kafka.p12" if target == "cp" else "{{ undefined_input }}",
+             "connect_rest_keystore": "/ctl/rest.p12" if rest == "mtls" else "{{ undefined_input }}",
+             "connect_rest_truststore": "/ctl/rest-ca.p12" if rest == "mtls" else "{{ undefined_input }}"}
+    cmd = [str(Path(sys.executable).parent / "ansible-playbook"), "-i", "localhost,", str(play),
+           "-e", "@%s" % (FIXTURES / "inputs.test.yml"), "-e", json.dumps(extra)]
+    proc = subprocess.run(cmd, cwd=tmp_path, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                          env=dict(os.environ, ANSIBLE_NOCOLOR="1", ANSIBLE_STDOUT_CALLBACK="default"))
+    assert proc.returncode == 0, proc.stdout[-3000:]
+    line = next(l for l in proc.stdout.splitlines() if '"msg": "STORES=' in l)
+    stores = json.loads(json.loads("{" + line.strip() + "}")["msg"][len("STORES="):])
+    assert [s["dest"].rsplit("/", 1)[1] for s in stores] == dests
+    assert all(s["dest"].startswith("/u/kafconn/config/ssl/") for s in stores)
+    srcs = {"kafka-client.p12": "/ctl/kafka.p12", "rest-server.p12": "/ctl/rest.p12",
+            "rest-client-ca.p12": "/ctl/rest-ca.p12"}
+    assert [s["src"] for s in stores] == [srcs[d] for d in dests]
 
 
 def test_install_copies_every_store_in_binary():
