@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# validate-mtls.sh — assert that mTLS + FIPS controls are correctly applied
+# validate-mtls.sh — assert that mTLS controls are applied and CP FIPS mode is
+# not set (it is not yet supported on s390x)
 # =============================================================================
 # CLUSTER-DEPENDENT: run against a real OCP-on-LinuxONE cluster after deploying
 # the 02-tls layer. NOT executed in CI.
@@ -45,14 +46,18 @@ else
 fi
 echo ""
 
-# 2. spec.tls.fips.enabled is set on the Kafka CR
-echo "--- Check: FIPS enabled on Kafka CR ---"
-fips_enabled=$(oc get kafka kafka -n "${NAMESPACE}" \
-  -o jsonpath='{.spec.tls.fips.enabled}' 2>/dev/null || echo "false")
-if [ "${fips_enabled}" = "true" ]; then
-  log_pass "spec.tls.fips.enabled=true on Kafka CR"
+# 2. spec.tls.fips.enabled is NOT set on the Kafka CR: CP FIPS mode is not yet
+#    supported on s390x (KNOWN-GAPS.md G-02)
+echo "--- Check: CP FIPS mode not set on Kafka CR (s390x) ---"
+if fips_enabled=$(oc get kafka kafka -n "${NAMESPACE}" \
+     -o jsonpath='{.spec.tls.fips.enabled}' 2>/dev/null); then
+  if [ "${fips_enabled}" = "true" ]; then
+    log_fail "spec.tls.fips.enabled=true on Kafka CR — CP FIPS mode is not yet supported on s390x (KNOWN-GAPS.md G-02)"
+  else
+    log_pass "spec.tls.fips.enabled not set on Kafka CR"
+  fi
 else
-  log_fail "spec.tls.fips.enabled is '${fips_enabled}' (expected 'true') — check FIPS-at-install caveat in README"
+  log_fail "Kafka CR 'kafka' not found in namespace ${NAMESPACE}"
 fi
 echo ""
 

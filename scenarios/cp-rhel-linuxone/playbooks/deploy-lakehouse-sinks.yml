@@ -5,7 +5,7 @@
 # Deploys Databricks Delta Lake and Snowflake Snowpipe Streaming sinks on a
 # CP-on-RHEL Connect worker running on s390x. Wraps the generic
 # ansible/playbooks/deploy-lakehouse-sinks.yml with LinuxONE-specific
-# group_vars (IBM Semeru JDK paths, FIPS-mode connector worker settings,
+# group_vars (IBM Semeru JDK paths, connector worker JVM settings,
 # PKCS12 MAC algorithm flag, optional JCEKS credential store for closed
 # z/IRD networks where Vault is unreachable).
 #
@@ -49,7 +49,7 @@
           Connector worker JDK is not IBM Semeru/OpenJ9.
           On s390x, the IBM JDK is required for CPACF crypto acceleration
           and predictable PKCS12 MAC algorithm behavior. See
-          docs/linuxone-fips-guide.md.
+          docs/adr/013-linuxone-deployment-guidance.md.
 
     - name: Ensure connector JAR paths exist for s390x
       ansible.builtin.stat:
@@ -106,7 +106,7 @@
           LinuxONE Lakehouse Sink Deployment Summary
           Architecture: {{ ansible_architecture }}
           JDK: {{ _java_version.stderr_lines[0] | default('unknown') }}
-          FIPS: {{ fips_enabled | default('unknown') }}
+          CP FIPS mode: off (not yet supported on s390x)
           ============================================
           Databricks: created={{ cp_databricks_sink_results.created | default(0) }},
                       healthy={{ cp_databricks_sink_results.healthy | default(0) }}/

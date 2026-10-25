@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # =============================================================================
 # FSI Kafka Platform -- FIPS 140-2 Compliance Validation
-# Validates FIPS compliance for Confluent Platform on RHEL.
+# Validates FIPS compliance for Confluent Platform on RHEL (x86/ARM).
 # Can also check CFK on OpenShift via --cfk flag.
+#
+# CP FIPS mode is not yet supported on s390x (CP versions-interoperability,
+# checked 2026-10-24), so on an s390x host this script reports not applicable
+# and exits 3. See docs/linuxone-fips-guide.md.
 #
 # Usage:
 #   scripts/validate-fips.sh           # Validate CP on RHEL (local host)
 #   scripts/validate-fips.sh --cfk     # Validate CFK on OpenShift (via oc)
 #   scripts/validate-fips.sh --check   # Syntax check only (CI-safe, no host)
+#
+# Exit codes: 0 all checks passed, 1 a check failed, 3 not applicable (s390x)
 # =============================================================================
 set -euo pipefail
 
@@ -67,9 +73,27 @@ if [ "${MODE}" = "--cfk" ]; then
     ((WARN++)) || true
   fi
 
+  # Check 4: s390x workers cannot run CP FIPS mode
+  echo -n "  [4] s390x worker nodes: "
+  s390x_nodes=$(oc get nodes -l kubernetes.io/arch=s390x -o name 2>/dev/null || true)
+  if [ -n "${s390x_nodes}" ]; then
+    echo "WARN -- s390x nodes present; CP FIPS mode is not yet supported on s390x, so FIPS-mode CRs must schedule on x86/ARM nodes"
+    ((WARN++)) || true
+  else
+    echo "PASS -- none"
+    ((PASS++)) || true
+  fi
+
 else
   echo "  Mode: CP on RHEL"
   echo ""
+
+  if [ "$(uname -m)" = "s390x" ]; then
+    echo "  [N/A] Confluent Platform FIPS mode is not yet supported on s390x"
+    echo "        (CP versions-interoperability, checked 2026-10-24)."
+    echo "        FIPS-mandated broker tiers run on x86/ARM. See docs/linuxone-fips-guide.md."
+    exit 3
+  fi
 
   # Check 1: OS-level FIPS mode
   echo -n "  [1] OS FIPS mode (/proc/sys/crypto/fips_enabled): "
@@ -130,67 +154,6 @@ else
   else
     echo "SKIP -- /etc/kafka/server.properties not found"
     ((WARN++)) || true
-  fi
-
-  # Check 5: Architecture-specific validation
-  ARCH=$(uname -m)
-  echo ""
-  echo "  [5] Architecture-specific FIPS checks (${ARCH}):"
-  if [ "${ARCH}" = "s390x" ]; then
-    # s390x: IBM JDK FIPS providers (not Bouncy Castle)
-    echo -n "    [5a] IBM FIPS provider: "
-    if java -XshowSettings:security 2>&1 | grep -qi "IBMJCEPlusFIPS\|IBMJCEFIPS"; then
-      echo "PASS -- IBM FIPS provider detected"
-      ((PASS++)) || true
-    else
-      echo "WARN -- IBM FIPS provider not in default provider list"
-      echo "      Check: java -XshowSettings:security 2>&1 | grep -i fips"
-      ((WARN++)) || true
-    fi
-
-    # s390x: PKCS12 keystore (not BCFKS)
-    echo "    [5b] PKCS12 keystore check (s390x uses PKCS12, not BCFKS):"
-    for conf in /etc/kafka/server.properties /etc/schema-registry/schema-registry.properties /etc/kafka-connect/connect-distributed.properties; do
-      echo -n "      ${conf}: "
-      if [ -f "${conf}" ]; then
-        if grep -q "ssl.keystore.type=PKCS12\|ssl.keystore.type=PKCS11" "${conf}"; then
-          echo "PASS"
-          ((PASS++)) || true
-        else
-          echo "WARN -- expected PKCS12 or PKCS11 on s390x"
-          ((WARN++)) || true
-        fi
-      else
-        echo "SKIP -- file not found"
-      fi
-    done
-
-    # s390x: CPACF detection (informational)
-    echo -n "    [5c] CPACF (CP Assist for Cryptographic Functions): "
-    if grep -q "msa" /proc/cpuinfo 2>/dev/null; then
-      echo "DETECTED (hardware crypto acceleration available)"
-      ((PASS++)) || true
-    else
-      echo "NOT DETECTED (software crypto only -- not a failure)"
-      ((WARN++)) || true
-    fi
-
-    # NTP skew check
-    echo -n "    [5d] NTP time synchronization: "
-    if command -v chronyc >/dev/null 2>&1; then
-      offset=$(chronyc tracking 2>/dev/null | grep "System time" | awk '{print $4}')
-      echo "offset=${offset:-unknown}s (should be < 1s)"
-      ((PASS++)) || true
-    elif command -v ntpstat >/dev/null 2>&1; then
-      echo "$(ntpstat 2>/dev/null | head -1)"
-      ((PASS++)) || true
-    else
-      echo "WARN -- no NTP client detected (chronyc/ntpstat)"
-      ((WARN++)) || true
-    fi
-  else
-    echo "    x86 architecture -- standard BC FIPS checks apply (see checks 3-4 above)"
-    ((PASS++)) || true
   fi
 fi
 

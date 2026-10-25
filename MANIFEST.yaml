@@ -338,7 +338,7 @@ capabilities:
     type: script
     name: "validate-fips.sh"
     path: "scripts/validate-fips.sh"
-    description: "Validate FIPS 140-2 compliance on target nodes"
+    description: "Validate FIPS 140-2 compliance on x86/ARM CP nodes; exits 3 (not applicable) on s390x, where CP FIPS mode is not yet supported"
 
   # ──────────────────────────────────────────────────
   # Observability Configs (6 + 1 doc)
@@ -510,7 +510,7 @@ capabilities:
     type: scenario
     name: "cp-rhel-linuxone"
     path: "scenarios/cp-rhel-linuxone"
-    description: "Confluent Platform on RHEL deployment scenario targeting IBM LinuxONE / s390x with IBM Semeru JDK + FIPS + JCEKS keystore overrides. Lakehouse playbooks per ADR-011."
+    description: "Confluent Platform 8.2.x on RHEL on IBM LinuxONE / s390x: mTLS (PKCS12, on-target keygen), IBM Semeru JDK default, JCEKS credential fallback. CP FIPS mode not set (not yet supported on s390x). Lakehouse playbooks per ADR-011."
 
   # ── Scenarios (1 — mainframe integration) ──
   - id: "scenario/mq-quickstart"

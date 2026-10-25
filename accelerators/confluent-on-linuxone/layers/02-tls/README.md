@@ -1,4 +1,4 @@
-# Layer 02: mTLS + FIPS Hardening
+# Layer 02: mTLS Hardening
 
 ## FSI Rationale
 
@@ -25,28 +25,30 @@ PCI audit.
    for broker-to-broker and component-to-broker communication. External listener retains
    Route edge-TLS for compatibility.
 
-3. **FIPS mode**: `spec.tls.fips.enabled: true` on all component CRs. On s390x, this
-   activates IBM Semeru's `IBMJCEPlusFIPS` provider and CPACF hardware acceleration for
-   AES-GCM and SHA-2 operations.
+3. **No CP FIPS mode**: `spec.tls.fips.enabled` is not set on any component CR, because
+   Confluent Platform FIPS mode is not yet supported on s390x (see below). CPACF still
+   accelerates the AES-GCM and SHA-2 operations behind TLS.
 
 4. **Cipher suite pinning**: `ssl.enabled.protocols=TLSv1.3,TLSv1.2` and an explicit
-   FIPS-approved cipher suite list via `configOverrides.server`.
+   AES-GCM cipher suite list via `configOverrides.server`.
 
 5. **cert-manager integration**: `certificate-crs.yaml` deploys cert-manager `Issuer` and
    `Certificate` CRs for declarative certificate auto-rotation (cert-manager Operator for
-   OpenShift, s390x-compatible and FIPS-validated since v1.14.0).
+   OpenShift, s390x-compatible since v1.14.0).
 
-## s390x FIPS caveat
+## FIPS on s390x
 
-**`spec.tls.fips.enabled: true` only takes effect on an OCP cluster installed in FIPS mode.**
-Setting this field on a non-FIPS cluster is a no-op — the JDK will not load FIPS providers.
+Confluent Platform FIPS mode is not yet supported on s390x (CP versions-interoperability,
+"Linux on IBM Z (s390x) support", checked 2026-10-24). A tier whose policy requires FIPS 140
+validated crypto on the brokers runs its brokers on x86/ARM until Confluent lists FIPS mode
+for s390x. mTLS, TLS 1.2/1.3 and CPACF acceleration are unaffected.
 
-FIPS must be enabled at OCP install time via `fips: true` in `install-config.yaml`.
-Post-install enablement is not supported by Red Hat. See `KNOWN-GAPS.md`.
+OS/JDK FIPS modes on s390x (RHEL `fips=1`, IBM Semeru `IBMJCEPlusFIPS`) are outside
+Confluent's s390x support statement; this kit makes no claim that they work or break with CP.
 
-For s390x specifically, FIPS validation runs through IBM Semeru 17's `IBMJCEPlusFIPS`
-provider, which maps to CPACF hardware instructions (KIMD, KM, KMO) — see ADR-013
-for the full s390x cryptographic stack decision.
+`validate-mtls.sh` fails if `spec.tls.fips.enabled` is set on the Kafka CR. The OCP
+FIPS-at-install rule (`fips: true` in `install-config.yaml`) applies only to x86/ARM OCP
+clusters running CP FIPS mode. See ADR-013 (Amendment 2026-10-24) and `KNOWN-GAPS.md` G-02.
 
 ## Manual cert rotation (no cert-manager fallback)
 
@@ -77,7 +79,8 @@ oc get kafka kafka -n confluent -w
 bash layers/02-tls/validate-mtls.sh
 ```
 
-Cluster-dependent. Asserts: no-cert client rejected; valid-cert client succeeds; TLS 1.0 rejected.
+Cluster-dependent. Asserts: no-cert client rejected; valid-cert client succeeds; TLS 1.0 rejected;
+`spec.tls.fips.enabled` not set on the Kafka CR.
 
 ## Cross-references
 
@@ -85,4 +88,4 @@ Cluster-dependent. Asserts: no-cert client rejected; valid-cert client succeeds;
 - `ansible/roles/cp_mtls/` — CA + leaf cert minting automation
 - `LinuxOne/ansible-mtls/` — LinuxONE-specific PKI automation
 - `scenarios/cfk-openshift-linuxone/values/kafka.yaml` — s390x node affinity conventions
-- `KNOWN-GAPS.md` — FIPS-at-install constraint, cipher suite cross-arch compatibility
+- `KNOWN-GAPS.md` — G-02 (no CP FIPS mode on s390x), cipher suite cross-arch compatibility

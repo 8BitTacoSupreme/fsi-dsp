@@ -72,3 +72,22 @@ Key specifics:
   (future: `role/linuxone_connect`)
 - Document MQ queue manager setup in partnership with IBM mainframe practice
 - Maintain a LinuxONE compatibility matrix for Confluent component versions
+
+## Amendment 2026-10-24 — s390x FIPS and the CP version floor
+
+The decision stands; two statements in it are withdrawn:
+
+- "FIPS 140-2 validated cryptographic modules on LinuxONE" (Decision, Security) and
+  "FIPS compliance is native; no additional certification work for crypto modules"
+  (Consequences). Confluent Platform FIPS mode is not yet supported on s390x
+  (CP versions-interoperability, "Linux on IBM Z (s390x) support", checked 2026-10-24).
+  A tier whose policy requires FIPS 140 validated crypto on the brokers runs its brokers
+  on x86/ARM until Confluent lists FIPS mode for s390x. This applies to Connect workers
+  on LinuxONE too.
+- OS/JDK FIPS modes on s390x (RHEL `fips=1`, IBM Semeru `IBMJCEPlusFIPS`) are outside
+  Confluent's s390x support statement; this kit makes no claim that they work or break
+  with CP. mTLS (ADR-006), TLS 1.2/1.3 and CPACF acceleration are unaffected.
+
+The same statement sets the CP floor for LinuxONE at 8.2.0, with a separately purchased
+IBM Z software entitlement. CP runs on Linux on Z only; z/OS reaches Kafka through the
+certified Connect on z/OS build (`scenarios/mq-quickstart`). See `docs/linuxone-fips-guide.md`.

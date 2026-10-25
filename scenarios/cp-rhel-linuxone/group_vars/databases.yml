@@ -28,12 +28,11 @@ cp_database_debezium_postgres_jar_path: "/opt/kafka-connect/plugins/debezium-deb
 cp_database_postgresql_driver_path: "/opt/kafka-connect/plugins/confluentinc-kafka-connect-jdbc/lib/postgresql-42.7.3.jar"
 
 # ---------------------------------------------------------------------------
-# FIPS-mode Connect worker JVM settings
+# Connect worker JVM settings (PKCS12 MAC portability). No FIPS flags:
+# CP FIPS mode is not yet supported on s390x.
 # ---------------------------------------------------------------------------
 cp_connect_jvm_extra_args:
   - "-Dkeystore.pkcs12.macAlgorithm=HmacPBESHA256"
-  - "-Dcom.ibm.fips.mode=true"          # IBM Semeru FIPS toggle
-  - "-Djava.security.properties=/etc/kafka-connect/security.fips.properties"
 
 # ---------------------------------------------------------------------------
 # Credential store: Vault preferred; JCEKS fallback for closed z/IRD networks

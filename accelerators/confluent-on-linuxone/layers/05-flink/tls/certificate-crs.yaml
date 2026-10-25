@@ -11,9 +11,10 @@
 #   - CMF's server cert is trusted by CFK (same CA = same trust chain)
 #   - No separate PKI infrastructure required for Flink
 #
-# FIPS note: cert-manager >=1.14.0 is FIPS-validated and s390x-supported.
-# RSA 4096 keys are FIPS-140-2 compliant. ECDSA P-384 is an acceptable
-# alternative if smaller key sizes are required.
+# Key algorithms: RSA 4096 (ECDSA P-384 is an acceptable alternative if
+# smaller key sizes are required). These are approved algorithms, but this is
+# not a CP FIPS-mode deployment: CP FIPS mode is not yet supported on s390x
+# (KNOWN-GAPS.md G-02). cert-manager >=1.14.0 is s390x-supported.
 # =============================================================================
 
 # --- Certificate 1: CMF server/client TLS ------------------------------------

@@ -4,7 +4,6 @@
 # =============================================================================
 # Uses cert-manager Operator for OpenShift (OperatorHub) which is:
 # - s390x-compatible (multi-arch images since v1.14.0)
-# - FIPS-validated (>=1.14.0 with FIPS build flag)
 #
 # The CA cert referenced by the ClusterIssuer must be minted separately by
 # ansible/roles/cp_mtls or LinuxOne/ansible-mtls/ and stored in ca-key-pair Secret.
