@@ -56,7 +56,7 @@ that is not explicitly responsible for schema lifecycle management.
 ## Cross-references
 
 - `docs/adr/002-compatibility-by-tier.md` — SLA-tier to compatibility-mode mapping
-- `docs/adr/009-linuxone-deployment-guidance.md` — s390x platform decisions
+- `docs/adr/013-linuxone-deployment-guidance.md` — s390x platform decisions
 - `layers/01-rbac/` — RBAC boundary that enforces hard-delete restriction
 - `KNOWN-GAPS.md` — SR bootstrap Job s390x image requirement (UBI9 + curl)
 

@@ -174,4 +174,4 @@ Cluster-dependent — requires OCP access. Not run in CI (see `.github/workflows
 - `MIGRATION.md` — x86→LinuxONE Cluster Linking migration with regulatory evidence collection
 - `KNOWN-GAPS.md` — s390x gap register (FIPS-at-install, Dynatrace connector, Connect image)
 - `ATTRIBUTION.md` — Mondics credit and license-gap rationale
-- `docs/adr/009-linuxone-deployment-guidance.md` — IBM Semeru, PKCS12, CPACF decisions
+- `docs/adr/013-linuxone-deployment-guidance.md` — IBM Semeru, PKCS12, CPACF decisions

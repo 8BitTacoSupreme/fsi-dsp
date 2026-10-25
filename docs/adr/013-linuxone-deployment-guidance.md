@@ -1,8 +1,10 @@
-# ADR-009: LinuxONE / s390x Deployment Guidance
+# ADR-013: LinuxONE / s390x Deployment Guidance
 
-## Status
+**Status:** Accepted
+**Date:** 2026-04-27
+**Author:** Jeremy Hogan
 
-Accepted
+> Renumbered from 009 on 2026-10-24 (collided with 009-linuxone-kafka-offload.md).
 
 ## Context
 

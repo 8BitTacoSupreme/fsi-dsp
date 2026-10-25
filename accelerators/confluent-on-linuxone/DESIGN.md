@@ -9,7 +9,7 @@
 `fsi-kafka-platform` is a GoodLabs accelerator repo for governed Kafka/Flink/SR
 infrastructure across deployment models. It is at v3.0 (LinuxONE/s390x first-class),
 with existing `scenarios/cfk-openshift-linuxone/` (Helm-values), Ansible roles
-(`cp_rbac`, `cp_mtls`, `cfk_operator`, `cfk_topic`), ADR-009 (s390x guidance), and
+(`cp_rbac`, `cp_mtls`, `cfk_operator`, `cfk_topic`), ADR-013 (s390x guidance), and
 observability templates for Splunk/Dynatrace.
 
 IBM's Matt Mondics published a working public reference — Confluent Platform on
@@ -99,7 +99,7 @@ Prefer first-class CR fields over raw `configOverrides` to keep patches non-coll
 | CA + cert PEMs feeding `spec.tls.secretRef` | `LinuxOne/ansible-mtls/` + `ansible/roles/cp_mtls` mint CA/leaf PEMs → become the K8s cert secrets; cert-manager is the in-cluster rotation alternative |
 | RBAC drift reconciliation | `ansible/roles/cp_rbac` runs an optional LIST/DIFF/ADD/REMOVE audit pass over the declarative `ConfluentRolebinding` CRs (ops + CI) |
 | SIEM dashboards/alerts | `observability/splunk/` + `observability/dynatrace/` — `layers/04-audit/siem/` references them, no duplication |
-| s390x decision rationale | `docs/adr/009-linuxone-deployment-guidance.md` — cross-linked from layer READMEs |
+| s390x decision rationale | `docs/adr/013-linuxone-deployment-guidance.md` — cross-linked from layer READMEs |
 
 CFK still manages all Confluent components; the Ansible roles act on the CFK-managed
 cluster via MDS/Helm REST — no parallel broker management path.
@@ -246,7 +246,7 @@ the toolchain (only the cluster images do).
 - Create: everything under `accelerators/confluent-on-linuxone/` (above).
 - Reference (do not modify): `scenarios/cfk-openshift-linuxone/values/kafka.yaml`,
   `ansible/roles/{cfk_operator,cp_rbac,cp_mtls}/`, `LinuxOne/ansible-mtls/`,
-  `observability/{splunk,dynatrace}/`, `docs/adr/009-linuxone-deployment-guidance.md`.
+  `observability/{splunk,dynatrace}/`, `docs/adr/013-linuxone-deployment-guidance.md`.
 
 ## Implementation sequence
 

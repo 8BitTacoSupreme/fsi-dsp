@@ -67,7 +67,7 @@ Cluster-dependent. Requires `confluent` CLI authenticated to MDS.
 
 ## Cross-references
 
-- `docs/adr/009-linuxone-deployment-guidance.md` — s390x platform decisions
+- `docs/adr/013-linuxone-deployment-guidance.md` — s390x platform decisions
 - `ansible/roles/cp_rbac/` — drift reconciliation tooling
 - `layers/04-audit/` — auditor-readonly consumes from the topic this layer restricts it to
 - `DESIGN.md` — locked decision D-02 (auditor-readonly scope)
