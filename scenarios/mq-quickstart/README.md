@@ -85,22 +85,23 @@ where it runs relative to this LPAR.
     |-- 2 install --- sftp (zos_copy) -> |               ^ cross-memory      |   cc: SASL_SSL   :9092 --> topic
     |-- 3 stage --> HLQ.KAFCONN.CNTL     |         queue manager -- queue    |
     |                                    +-----------------------------------+
-    |-- 4-6 start / register / health ---- HTTP :8083 --> Connect REST API
+    |-- 4-6 start / register / health ---- HTTPS (mTLS) :8083 --> Connect REST API
     |
     +-- GATED (people, not Ansible); out/<host>/gates.txt lists them:
           RACFSTC + RACFRING .... security team
           PROCCOPY .............. systems programmer
           path to the brokers ... systems programmer (same_cec) or network team; inbound 8083
           kafka-access.sh ....... Kafka platform team (cp)
+          REST mTLS, no RBAC .... security team (accepts who can call the API)
 ```
 
 ## Steps
 
 | # | Step | Automated? | How | Owner |
 |---|---|---|---|---|
-| 0 | Preflight | Yes | `preflight.sh` over SSH. Remote checks: z/OS ≥ V2R5, Java 17+, bash, IBM Python 3.12+, ZOAU 1.4.x, MQ `java/lib` (libmqjbnd + jars), SCSQAUTH/SCSQANLE, codeset, free space, a TCP connection to every bootstrap broker, online zIIP. Controller checks: the tarball and zip layouts, and on `cp` the client keystore | you |
+| 0 | Preflight | Yes | `preflight.sh` over SSH. Remote checks: z/OS ≥ V2R5, Java 17+, bash, IBM Python 3.12+, ZOAU 1.4.x, MQ `java/lib` (libmqjbnd + jars), SCSQAUTH/SCSQANLE, codeset, free space, a TCP connection to every bootstrap broker, online zIIP. Controller checks: the tarball and zip layouts, on `cp` the client keystore, and on `mtls` the five REST API files | you |
 | 1 | Build | Yes, controller only | Unpack. Point the launcher shebangs at z/OS bash. Repack as ustar with `--no-xattrs`. Render every file, then lint it. Output goes to `out/<host>/` for review, with `gates.txt` and, on `cp`, `kafka/kafka-access.sh` | you |
-| 2 | Install | Yes | `zos_copy` the bundle in binary and extract it untagged. `zos_encode` the two launchers to IBM-1047. Symlink the MQ jars into each connector's `lib/`. Upload the config with per-file encoding. On `cp`, copy the PKCS12 keystore in binary (0600, tagged binary) | you |
+| 2 | Install | Yes | `zos_copy` the bundle in binary and extract it untagged. `zos_encode` the two launchers to IBM-1047. Symlink the MQ jars into each connector's `lib/`. Upload the config with per-file encoding. Copy the PKCS12 stores in binary (0600, tagged binary): the Kafka keystore on `cp`, the REST server keystore and client-CA truststore on `mtls` | you |
 | 3 | Stage | Yes, own HLQ | `zos_data_set` + `zos_copy` put the PROC and gated jobs in `<HLQ>.KAFCONN.CNTL` and the CA PEM in `<HLQ>.KAFCONN.CACERT`. The run then prints the ticket checklist and stops | you |
 | — | RACF | Generated, gated | `RACFSTC` (STARTED profile) and `RACFRING` (CA, key ring, `IRR.DIGTCERT.LISTRING`) | security team |
 | — | PROCLIB | Generated, gated | `PROCCOPY` (IEBCOPY into the target PROCLIB) | systems programmer |
@@ -108,7 +109,7 @@ where it runs relative to this LPAR.
 | — | Kafka access | Generated, gated (`cp`) | `out/<host>/kafka/kafka-access.sh`: RBAC role bindings or ACLs for the worker principal | Kafka platform team |
 | — | zIIP | Check only | The preflight runs `D M=CPU`. Enabling zIIP is a sysprog/licensing decision | sysprog |
 | 4 | Start | Yes, after the gates | Read-only gate checks (`mls` PROCLIB, `RLIST STARTED`), then `zos_operator "S KAFCONN"`, then wait for REST | you |
-| 5 | Register | Yes | fsi-dsp `ansible/roles/cp_connect`, unchanged: `PUT /connectors/{name}/config`, poll status, restart failed tasks | you |
+| 5 | Register | Yes | fsi-dsp `ansible/roles/cp_connect`, with the REST CA and this controller's client certificate on `mtls`: `PUT /connectors/{name}/config`, poll status, restart failed tasks | you |
 | 6 | Health | Yes | Every connector and task RUNNING, plus failure signatures in the STDOUT/STDERR log files | you |
 | 7 | Stop | On demand | `--tags stop` runs `zos_operator "P KAFCONN"` | you |
 
@@ -238,8 +239,21 @@ kit keeps that as an input (`connect_props_encoding`). The health check names
   30-day trial on either target.
 - **Converters are `StringConverter`**, as in the guide. Production canon is
   Avro or Protobuf with Schema Registry.
-- **The Connect REST API is plain HTTP with no authentication.** Limit inbound
-  access to the controller (the firewall ticket).
+- **The Connect REST API serves HTTPS and requires a client certificate**
+  (`connect_rest_security: mtls`, the default):
+  - The REST listener has its own keystore and truststore under
+    `listeners.https.`, never the worker's Kafka client keystore.
+  - The controller presents a PEM client certificate on start, register and
+    health.
+  - There is no REST RBAC, so any certificate signed by the truststore's CA has
+    full control of the connectors. Use a dedicated CA; the stage step's
+    SECURITY gate records that acceptance.
+  - Confluent's Connect RBAC REST extension
+    (`io.confluent.connect.security.ConnectSecurityExtension`, present in the
+    8.1.0 z/OS tarball) would add per-user authorization, but it needs MDS and
+    per-connector principals. It is not built.
+  - `connect_rest_security: http` keeps a plain-HTTP, unauthenticated API: limit
+    inbound access to the controller (the firewall ticket).
 - **Ordering:** `tasks.max=1` keeps the queue's order.
 - **Logs:** STDOUT carries WARN and above, because the file is opened with
   OAPPEND and never rotates. The full INFO log rolls in
@@ -251,7 +265,7 @@ Run from this directory with the Python that has ansible-core 2.16+ and the
 collection installed:
 
 ```bash
-python -m pytest tests -v        # 110 tests
+python -m pytest tests -v        # 152 tests
 ansible-playbook site.yml -i tests/fixtures/inventory.test.yml \
   -e @tests/fixtures/inputs.test.yml --syntax-check
 ansible-lint site.yml tasks vars
@@ -290,8 +304,36 @@ What the tests prove:
   - that a bad target choice, a missing keystore, a placeholder principal,
     cluster id or CA label, and a `confluent.cloud` bootstrap on the `cp`
     default each stop the build.
+- **`test_rest_security.py`:**
+  - The `mtls` default renders `listeners=https://`, `rest.advertised.listener=https`
+    and exactly the expected `listeners.https.` set. The REST keystore is never
+    the Kafka client keystore, and there is no top-level `ssl.client.auth` or
+    truststore.
+  - `cc` with `mtls` renders the same REST set.
+  - `http` renders today's three lines and reads none of the mTLS-only inputs
+    (they are undefined in that run).
+  - The SECURITY gate is present for each mode, and backslashes in the REST
+    passwords are escaped.
+  - Each of these stops the build:
+    - a bad `connect_rest_security`;
+    - an inputs file from before REST mTLS (it is told to set `http`);
+    - a missing, placeholder or empty REST file;
+    - a controller key readable by group or others.
+  - A static check confirms that install copies every PKCS12 store in binary.
+- **`test_rest_api.py`:** the real `register` and `health` plays run against a
+  fake Connect REST API (`tests/ansible/fake_connect_rest.py`) that requires a
+  client certificate, with test PKI generated per run:
+  - register sends the PUT with the controller's certificate;
+  - a certificate from another CA fails with the deploy summary;
+  - `http` mode reads no mTLS input;
+  - health reads status over mTLS.
+
+  `start.yml`'s wait task is checked statically, because it needs z/OS.
 - **`test_preflight.py`:**
-  - The good image passes all 19 checks (18 on `cc`, which has no keystore).
+  - The good image passes all 24 checks (23 on `cc`, which has no keystore; 19
+    with `connect_rest_security: http`).
+  - A missing, unset or empty REST file fails on `mtls` with its own label, for
+    each of the five.
   - Each of 19 broken prerequisites fails with its own `[FAIL]` line.
   - A missing, unreadable or empty keystore fails on `cp`.
   - Every bootstrap broker is tested, in one call; a broker without its own
@@ -330,6 +372,15 @@ What the tests prove:
   sink 2.1.2. The sink ships disabled.
 - The REST port default in Confluent's z/OS build. The kit sets `listeners=`
   explicitly, so it does not depend on it.
+- The REST API over mTLS on z/OS:
+  - Jetty on IBM Semeru loading the two PKCS12 stores from z/OS UNIX;
+  - the binary copy and `chtag -b` of those stores;
+  - a TLS 1.3 client-certificate handshake from the controller;
+  - workers forwarding requests to the leader over mTLS (the kit configures one
+    `connect_rest_host`).
+
+  The fake REST API tests prove what the controller sends, not what the z/OS
+  listener accepts.
 
 ### Not verified: needs a Confluent Platform cluster
 

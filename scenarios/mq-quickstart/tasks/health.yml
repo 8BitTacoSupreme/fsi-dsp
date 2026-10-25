@@ -10,6 +10,9 @@
 - name: Read each connector's status
   ansible.builtin.uri:
     url: "{{ connect_rest_url }}/connectors/{{ item.name }}/status"
+    ca_path: "{{ connect_rest_ca_pem if (connect_rest_mtls | bool) else omit }}"
+    client_cert: "{{ connect_rest_client_cert_pem if (connect_rest_mtls | bool) else omit }}"
+    client_key: "{{ connect_rest_client_key_pem if (connect_rest_mtls | bool) else omit }}"
     return_content: true
     status_code:
       - 200

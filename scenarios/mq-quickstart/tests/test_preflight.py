@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from conftest import FIXTURES, SCENARIO, build_fake_archives, fake_keystore, run_site
+from conftest import FIXTURES, SCENARIO, build_fake_archives, fake_keystore, fake_rest_files, run_site
 
 GOOD = FIXTURES / "zos" / "good"
 CP_BROKERS = "kafka-0.cp.test:9093,kafka-1.cp.test:9093"
@@ -27,7 +27,17 @@ def zos(tmp_path):
 @pytest.fixture(scope="module")
 def archives(tmp_path_factory):
     dl = tmp_path_factory.mktemp("dl")
-    return build_fake_archives(dl) + (fake_keystore(dl),)
+    return build_fake_archives(dl) + (fake_keystore(dl), fake_rest_files(dl / "rest"))
+
+
+# preflight.sh variable for each REST input, and the label of its check
+REST_CHECKS = {
+    "REST_KEYSTORE": ("connect_rest_keystore", "REST server keystore"),
+    "REST_TRUSTSTORE": ("connect_rest_truststore", "REST client-CA truststore"),
+    "REST_CA_PEM": ("connect_rest_ca_pem", "REST CA (controller)"),
+    "REST_CLIENT_CERT": ("connect_rest_client_cert_pem", "REST client certificate (controller)"),
+    "REST_CLIENT_KEY": ("connect_rest_client_key_pem", "REST client key (controller)"),
+}
 
 
 def fake_ssh_path():
@@ -37,8 +47,10 @@ def fake_ssh_path():
 
 
 def run(zos_dir, archives, **overrides):
-    tarball, connector, keystore = archives
+    tarball, connector, keystore, rest_files = archives
     env = {
+        "CONNECT_REST_SECURITY": "mtls",
+        **{var: str(rest_files[name]) for var, (name, _label) in REST_CHECKS.items()},
         "PATH": fake_ssh_path(),
         "FAKE_ZOS_DIR": str(zos_dir),
         "ZOS_HOST": "zos-test.example.com", "ZOS_USER": "KAFUSER",
@@ -66,10 +78,14 @@ def test_good_image_passes_every_check(zos, archives):
     proc, lines = run(zos, archives)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     oks = [line for line in lines if line.startswith("[ ok ]")]
-    # 3 controller tools + tarball + zip + keystore + ssh + 13 remote answers (2 MQ data sets)
-    assert len(oks) == 19, "\n".join(lines)
-    assert "=== Result: 19 ok, 0 fail, 0 warn ===" in lines
+    # 3 controller tools + tarball + zip + keystore + 5 REST files + ssh
+    # + 13 remote answers (2 MQ data sets)
+    assert len(oks) == 24, "\n".join(lines)
+    assert "=== Result: 24 ok, 0 fail, 0 warn ===" in lines
     assert "Kafka target: cp (same_cec), brokers " + CP_BROKERS in lines
+    assert "Connect REST API: mtls" in lines
+    assert [line.split(" — ")[0] for line in oks if line.startswith("[ ok ] REST ")] == \
+        ["[ ok ] " + label for _name, label in REST_CHECKS.values()]
     assert any("z/OS level — V3R1" in line for line in oks)
     assert any("zIIP — 2 online" in line for line in oks)
     assert any(line.startswith("[ ok ] outbound Kafka — 2 of 2 brokers reachable") for line in oks)
@@ -80,9 +96,33 @@ def test_cc_target_has_no_keystore_check(zos, archives):
     proc, lines = run(zos, archives, KAFKA_TARGET="cc", CP_PLACEMENT="", KAFKA_CLIENT_KEYSTORE="",
                       KAFKA_BOOTSTRAP=CC_BROKER)
     assert proc.returncode == 0, proc.stdout
-    assert "=== Result: 18 ok, 0 fail, 0 warn ===" in lines
+    assert "=== Result: 23 ok, 0 fail, 0 warn ===" in lines
     assert "Kafka target: cc, brokers " + CC_BROKER in lines
     assert not any("client keystore" in line for line in lines)
+
+
+def test_http_rest_api_has_no_rest_file_checks(zos, archives):
+    blanks = {var: "" for var in REST_CHECKS}
+    proc, lines = run(zos, archives, CONNECT_REST_SECURITY="http", **blanks)
+    assert proc.returncode == 0, proc.stdout
+    assert "=== Result: 19 ok, 0 fail, 0 warn ===" in lines
+    assert "Connect REST API: http" in lines
+    assert not [line for line in lines if line.startswith(("[ ok ] REST ", "[FAIL] REST "))]
+
+
+@pytest.mark.parametrize("var", sorted(REST_CHECKS))
+@pytest.mark.parametrize("state", ["unset", "absent", "empty"])
+def test_mtls_without_a_usable_rest_file_fails(zos, archives, tmp_path, var, state):
+    path = {"unset": "", "absent": str(tmp_path / "absent.pem"), "empty": str(tmp_path / "empty.pem")}[state]
+    if state == "empty":
+        (tmp_path / "empty.pem").write_bytes(b"")
+    proc, lines = run(zos, archives, **{var: path})
+    name, label = REST_CHECKS[var]
+    assert proc.returncode == 1, proc.stdout
+    assert len(fails(lines)) == 1, "\n".join(fails(lines))
+    assert fails(lines)[0].startswith("[FAIL] %s — " % label)
+    assert (name + " unset" if state == "unset" else path) in fails(lines)[0]
+    assert "inputs.yml contract, Connect REST API" in fails(lines)[0]
 
 
 @pytest.mark.parametrize("keystore", ["", "absent", "empty"])
@@ -185,19 +225,26 @@ def test_missing_input_is_a_usage_error(zos, archives):
     assert "missing: ZOS_HOST" in proc.stderr
 
 
-@pytest.mark.parametrize("target", ["cp", "cc"])
+@pytest.mark.parametrize("target", ["cp", "cc", "http"])
 def test_site_preflight_play_renders_its_environment(tmp_path, target):
     """The preflight play's environment block is rendered on every run (the
-    play is tagged always), so it must not read the other target's inputs."""
+    play is tagged always), so it must not read inputs the chosen Kafka target
+    or REST mode leaves undefined."""
     zos_dir = tmp_path / "zos"
     shutil.copytree(GOOD, zos_dir)
-    extra, want = [], "Kafka target: cp (same_cec), brokers " + CP_BROKERS
+    extra, want = [], ["Kafka target: cp (same_cec), brokers " + CP_BROKERS, "Connect REST API: mtls",
+                       "24 ok, 0 fail"]
     if target == "cc":
         (zos_dir / "tcp.out").write_text("OPEN %s\n" % CC_BROKER)
         extra = [json.dumps({"kafka_target": "cc", "kafka_bootstrap": CC_BROKER,
                              "kafka_client_keystore": "{{ undefined_cp_only_input }}"})]
-        want = "Kafka target: cc, brokers " + CC_BROKER
+        want = ["Kafka target: cc, brokers " + CC_BROKER, "23 ok, 0 fail"]
+    if target == "http":
+        extra = [json.dumps(dict({"connect_rest_security": "http"},
+                                 **{name: "{{ undefined_mtls_only_input }}" for name, _l in REST_CHECKS.values()}))]
+        want = ["Connect REST API: http", "19 ok, 0 fail"]
     proc, _out = run_site(tmp_path, *extra, tags="preflight", skip_tags="",
                           env={"PATH": fake_ssh_path(), "FAKE_ZOS_DIR": str(zos_dir)})
     assert proc.returncode == 0, proc.stdout[-4000:]
-    assert want in proc.stdout
+    for line in want:
+        assert line in proc.stdout, line

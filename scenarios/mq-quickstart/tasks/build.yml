@@ -21,6 +21,23 @@
       (Confluent Cloud). A cp target needs kafka_client_keystore and a Confluent
       Platform bootstrap; for Confluent Cloud, set kafka_target: cc.
 
+# Same idea for an inputs.yml from before the REST API served mTLS.
+- name: Assert the Connect REST security matches its inputs
+  ansible.builtin.assert:
+    that:
+      - connect_rest_security in ['mtls', 'http']
+      - >-
+        (not (connect_rest_mtls | bool))
+        or (connect_rest_keystore is defined and connect_rest_truststore is defined
+            and connect_rest_ca_pem is defined and connect_rest_client_cert_pem is defined
+            and connect_rest_client_key_pem is defined)
+    fail_msg: >-
+      connect_rest_security={{ connect_rest_security }}. It must be mtls (the
+      default: HTTPS with client certificates, which needs connect_rest_keystore,
+      connect_rest_truststore, connect_rest_ca_pem, connect_rest_client_cert_pem and
+      connect_rest_client_key_pem) or http. To keep the plain-HTTP API, set
+      connect_rest_security: http.
+
 - name: Assert inputs.yml has no placeholders left
   ansible.builtin.assert:
     that:
@@ -42,6 +59,11 @@
     - "{{ kafka_client_keystore if (cp_target | bool) else '' }}"
     - "{{ kafka_client_principal if (cp_target | bool) else '' }}"
     - "{{ cp_kafka_cluster_id if ((cp_target | bool) and cp_authorizer == 'rbac') else '' }}"
+    - "{{ connect_rest_keystore if (connect_rest_mtls | bool) else '' }}"
+    - "{{ connect_rest_truststore if (connect_rest_mtls | bool) else '' }}"
+    - "{{ connect_rest_ca_pem if (connect_rest_mtls | bool) else '' }}"
+    - "{{ connect_rest_client_cert_pem if (connect_rest_mtls | bool) else '' }}"
+    - "{{ connect_rest_client_key_pem if (connect_rest_mtls | bool) else '' }}"
 
 - name: Assert the choices are ones the kit implements
   ansible.builtin.assert:
@@ -73,6 +95,40 @@
       kafka_client_keystore={{ kafka_client_keystore }} is missing, unreadable or
       empty. The Kafka platform team issues it (inputs.yml contract, item 3).
   when: cp_target | bool
+
+- name: Check the Connect REST API certificates and stores
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+  loop: "{{ connect_rest_pki_files if (connect_rest_mtls | bool) else [] }}"
+  loop_control:
+    label: "{{ item.var }}"
+  register: _rest_files
+
+- name: Assert each REST API file is a readable, non-empty file
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg and item.stat.readable
+      - item.stat.size > 0
+    fail_msg: >-
+      {{ item.item.var }}={{ item.item.path }} is missing, unreadable or empty. The
+      PKI team issues it for the {{ item.item.where }} (inputs.yml contract, Connect REST API).
+    quiet: true
+  loop: "{{ _rest_files.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.var }}"
+
+# ansible.builtin.uri reads the key unencrypted, so the file mode is its only guard.
+- name: Assert the controller's REST client key is private
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.rgrp or item.stat.roth or item.stat.wgrp or item.stat.woth)
+    fail_msg: >-
+      {{ item.item.var }}={{ item.item.path }} is readable by group or others; chmod 600 it.
+    quiet: true
+  loop: "{{ _rest_files.results | default([]) | selectattr('item.private') | list }}"
+  loop_control:
+    label: "{{ item.item.var }}"
 
 - name: Assert names fit MVS rules (1-8 characters, national characters allowed)
   ansible.builtin.assert:
