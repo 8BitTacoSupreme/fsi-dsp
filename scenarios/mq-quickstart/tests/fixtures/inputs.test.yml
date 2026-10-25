@@ -52,6 +52,14 @@ connect_value_converter: org.apache.kafka.connect.storage.StringConverter
 
 connect_rest_port: 8083
 connect_rest_host: zos-test.example.com
+connect_rest_security: mtls
+connect_rest_keystore: OVERRIDDEN_BY_TEST
+connect_rest_keystore_password: TESTRESTKSPW
+connect_rest_truststore: OVERRIDDEN_BY_TEST
+connect_rest_truststore_password: TESTRESTTSPW
+connect_rest_ca_pem: OVERRIDDEN_BY_TEST
+connect_rest_client_cert_pem: OVERRIDDEN_BY_TEST
+connect_rest_client_key_pem: OVERRIDDEN_BY_TEST
 
 tls_truststore: racf_keyring
 racf_keyring: KAFCONN.RING

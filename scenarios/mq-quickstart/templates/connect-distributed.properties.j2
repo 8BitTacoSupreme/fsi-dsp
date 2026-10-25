@@ -10,32 +10,33 @@
 # .properties to IBM-1047).
 # =============================================================================
 {#
-  One security block per client prefix, from kafka_client_security (vars/derived.yml).
+  One settings block per prefix: kafka_client_security for each Kafka client
+  prefix, connect_rest_listener_ssl for the REST listener (vars/derived.yml).
   Backslashes are doubled because Java .properties treats them as escapes.
 #}
-{% macro client_security(prefix) %}
-{% for key, value in kafka_client_security.items() %}
+{% macro props_block(settings, prefix) %}
+{% for key, value in settings.items() %}
 {{ prefix }}{{ key }}={{ value | string | replace('\\', '\\\\') }}
 {% endfor %}
 {% endmacro %}
 
 # --- Worker connection to {{ 'Confluent Platform (mTLS)' if (cp_target | bool) else 'Confluent Cloud (API key)' }}
 bootstrap.servers={{ kafka_bootstrap }}
-{{ client_security('') -}}
+{{ props_block(kafka_client_security, '') -}}
 client.dns.lookup=use_all_dns_ips
 
 # --- Connector producers (MQ source) -----------------------------------------
 # Connect gives connector producers and consumers only their prefixed settings
 # (Kafka 4.1 Worker), so the security block is repeated for each.
 # acks/idempotence/lz4 are the FSI producer canon.
-{{ client_security('producer.') -}}
+{{ props_block(kafka_client_security, 'producer.') -}}
 producer.client.dns.lookup=use_all_dns_ips
 producer.acks=all
 producer.enable.idempotence=true
 producer.compression.type=lz4
 
 # --- Connector consumers (MQ sink) -------------------------------------------
-{{ client_security('consumer.') -}}
+{{ props_block(kafka_client_security, 'consumer.') -}}
 consumer.client.dns.lookup=use_all_dns_ips
 
 # --- Distributed coordination ------------------------------------------------
@@ -64,6 +65,18 @@ plugin.path={{ connect_plugins_dir }}
 # --- REST API ----------------------------------------------------------------
 # rest.port was removed in Apache Kafka 3.0 and is silently ignored, so the
 # guide's rest.port=8082 left the worker on the default 8083.
+{% if connect_rest_mtls | bool %}
+# HTTPS, client certificate required. The listeners.https. settings are the
+# REST listener's own stores: unprefixed, it would reuse this worker's ssl.*
+# (the Kafka client keystore on Confluent Platform). Once any prefixed setting
+# is present the unprefixed ones are ignored, so the set is complete.
+listeners=https://0.0.0.0:{{ connect_rest_port }}
+rest.advertised.listener=https
+rest.advertised.host.name={{ connect_rest_host }}
+rest.advertised.port={{ connect_rest_port }}
+{{ props_block(connect_rest_listener_ssl, 'listeners.https.') -}}
+{% else %}
 listeners=http://0.0.0.0:{{ connect_rest_port }}
 rest.advertised.host.name={{ connect_rest_host }}
 rest.advertised.port={{ connect_rest_port }}
+{% endif %}

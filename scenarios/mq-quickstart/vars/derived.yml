@@ -35,7 +35,7 @@ out_dir: "{{ out_root | default(playbook_dir) }}/out/{{ inventory_hostname }}"
 bundle_path: "{{ out_dir }}/connect-zos-bundle.tar"
 
 # --- Kafka connection ------------------------------------------------------------
-connect_rest_url: "http://{{ connect_rest_host }}:{{ connect_rest_port }}"
+connect_rest_url: "{{ 'https' if (connect_rest_mtls | bool) else 'http' }}://{{ connect_rest_host }}:{{ connect_rest_port }}"
 connect_config_topic: "{{ connect_group_id }}-configs"
 connect_offset_topic: "{{ connect_group_id }}-offsets"
 connect_status_topic: "{{ connect_group_id }}-status"
@@ -49,10 +49,45 @@ kafka_sasl_jaas_config: >-
 kafka_target: cp
 cp_placement: same_cec
 cp_authorizer: rbac
+connect_rest_security: mtls
 
 cp_target: "{{ kafka_target == 'cp' }}"
 zos_kafka_ssl_dir: "{{ connect_config_dir }}/ssl"
 zos_kafka_keystore_path: "{{ zos_kafka_ssl_dir }}/kafka-client.p12"
+
+# --- Connect REST API over mTLS ------------------------------------------------------
+# The REST listener gets its own keystore and truststore under listeners.https.
+# (connect/security.html): unprefixed, it would reuse the worker's ssl.* settings,
+# which on Confluent Platform are the Kafka client keystore. Read only when
+# connect_rest_mtls is true, so an http-mode inputs.yml needs none of these.
+connect_rest_mtls: "{{ connect_rest_security == 'mtls' }}"
+zos_rest_keystore_path: "{{ zos_kafka_ssl_dir }}/rest-server.p12"
+zos_rest_truststore_path: "{{ zos_kafka_ssl_dir }}/rest-client-ca.p12"
+connect_rest_listener_ssl:
+  ssl.keystore.type: PKCS12
+  ssl.keystore.location: "{{ zos_rest_keystore_path }}"
+  ssl.keystore.password: "{{ connect_rest_keystore_password }}"
+  ssl.key.password: "{{ connect_rest_keystore_password }}"
+  ssl.truststore.type: PKCS12
+  ssl.truststore.location: "{{ zos_rest_truststore_path }}"
+  ssl.truststore.password: "{{ connect_rest_truststore_password }}"
+  ssl.client.auth: required
+  ssl.endpoint.identification.algorithm: https
+# The five files build checks before anything is copied: who issues each, and
+# where it lives.
+connect_rest_pki_files:
+  - {var: connect_rest_keystore, path: "{{ connect_rest_keystore }}", where: z/OS, private: false}
+  - {var: connect_rest_truststore, path: "{{ connect_rest_truststore }}", where: z/OS, private: false}
+  - {var: connect_rest_ca_pem, path: "{{ connect_rest_ca_pem }}", where: controller, private: false}
+  - {var: connect_rest_client_cert_pem, path: "{{ connect_rest_client_cert_pem }}", where: controller, private: false}
+  - {var: connect_rest_client_key_pem, path: "{{ connect_rest_client_key_pem }}", where: controller, private: true}
+
+# PKCS12 files copied binary into zos_kafka_ssl_dir (tasks/install.yml).
+zos_binary_stores: >-
+  {{ ([{'src': kafka_client_keystore, 'dest': zos_kafka_keystore_path}] if (cp_target | bool) else [])
+     + ([{'src': connect_rest_keystore, 'dest': zos_rest_keystore_path},
+         {'src': connect_rest_truststore, 'dest': zos_rest_truststore_path}]
+        if (connect_rest_mtls | bool) else []) }}
 
 # Client security, one map per target, written out for every client prefix
 # (worker, producer., consumer., and the connectors' confluent.topic. license
@@ -111,6 +146,13 @@ approval_gates_all:
     {{ ('SYSPROG   add the CA that signs the brokers to ' ~ zos_java_home
     ~ '/lib/security/cacerts (tls_truststore: jvm_default)')
     if ((cp_target | bool) and not (racf_keyring_enabled | bool)) else '' }}
+  - >-
+    {{ ('SECURITY  accept mTLS on the Connect REST API (' ~ connect_rest_host ~ ':' ~ connect_rest_port
+    ~ '): any client certificate signed by a CA in ' ~ (connect_rest_truststore | basename)
+    ~ ' has full control (no REST RBAC)')
+    if (connect_rest_mtls | bool)
+    else ('SECURITY  accept a plain-HTTP, unauthenticated Connect REST API on ' ~ connect_rest_host
+    ~ ':' ~ connect_rest_port ~ ' (connect_rest_security: http)') }}
   - "NETWORK   inbound TCP {{ connect_rest_port }} to {{ connect_rest_host }} from this controller"
 approval_gates: "{{ approval_gates_all | select | list }}"
 

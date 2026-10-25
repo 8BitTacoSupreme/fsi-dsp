@@ -78,11 +78,31 @@ def fake_keystore(dest):
     return keystore
 
 
+def fake_rest_files(dest):
+    """Stand-ins for the Connect REST API's stores and the controller's client
+    certificate. Build only checks that each is a readable, non-empty file (and
+    that the key is private); the REST API tests use real PEMs instead."""
+    dest.mkdir(parents=True, exist_ok=True)
+    files = {
+        "connect_rest_keystore": dest / "kafconn-rest.keystore.p12",
+        "connect_rest_truststore": dest / "kafconn-rest-clients.truststore.p12",
+        "connect_rest_ca_pem": dest / "rest-ca.pem",
+        "connect_rest_client_cert_pem": dest / "controller.cert.pem",
+        "connect_rest_client_key_pem": dest / "controller.key.pem",
+    }
+    for path in files.values():
+        path.write_bytes(b"\x30\x82" + bytes(range(64)))
+    files["connect_rest_client_key_pem"].chmod(0o600)
+    return files
+
+
 def run_site(workdir, *extra_vars, tags="build", skip_tags="preflight", env=None):
-    """Run site.yml against the test inventory with fake archives and keystore.
+    """Run site.yml against the test inventory with fake archives, keystore and
+    REST files. extra_vars come last, so a test can override any of them.
     Returns (proc, out_dir)."""
     tarball, connector = build_fake_archives(workdir / "downloads")
     keystore = fake_keystore(workdir / "downloads")
+    rest_files = fake_rest_files(workdir / "downloads" / "rest")
     playbook = Path(sys.executable).parent / "ansible-playbook"
     cmd = [
         str(playbook), "site.yml",
@@ -94,6 +114,8 @@ def run_site(workdir, *extra_vars, tags="build", skip_tags="preflight", env=None
         "-e", "out_root=%s" % workdir,
         "--tags", tags,
     ]
+    for var, path in rest_files.items():
+        cmd += ["-e", "%s=%s" % (var, path)]
     if skip_tags:
         cmd += ["--skip-tags", skip_tags]
     for ev in extra_vars:

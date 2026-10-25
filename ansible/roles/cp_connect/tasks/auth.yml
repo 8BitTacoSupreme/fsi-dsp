@@ -1,0 +1,29 @@
+---
+# =============================================================================
+# cp_connect role -- Resolve REST API TLS and authentication options
+# =============================================================================
+# Imported first by check.yml, deploy.yml and validate.yml, because the
+# connector wrapper roles call those files directly with tasks_from.
+# =============================================================================
+
+- name: Assert one Connect REST authentication method
+  ansible.builtin.assert:
+    that:
+      - not ((cp_connect_token | length > 0) and (cp_connect_user | length > 0))
+      - (cp_connect_user | length > 0) == (cp_connect_password | length > 0)
+      - (cp_connect_client_key | length == 0) or (cp_connect_client_cert | length > 0)
+      - >-
+        (cp_connect_url is match('https://'))
+        or ((cp_connect_ca_path ~ cp_connect_client_cert ~ cp_connect_client_key) | length == 0)
+    fail_msg: >-
+      cp_connect: set cp_connect_token (bearer) or cp_connect_user + cp_connect_password
+      (basic), not both; cp_connect_client_key needs cp_connect_client_cert; the TLS
+      options need an https:// cp_connect_url (got {{ cp_connect_url }}).
+    quiet: true
+
+- name: Resolve Connect REST request options
+  ansible.builtin.set_fact:
+    _cp_connect_auth_headers: >-
+      {{ {'Authorization': 'Bearer ' ~ cp_connect_token} if (cp_connect_token | length > 0) else {} }}
+    _cp_connect_use_basic: "{{ cp_connect_user | length > 0 }}"
+  no_log: true

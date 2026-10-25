@@ -22,7 +22,7 @@
   when: ansible_check_mode | bool
 
 # --- Normal mode: deploy connectors ------------------------------------------
-- name: Deploy connectors via REST API  # noqa: ignore-errors
+- name: Deploy connectors via REST API
   ansible.builtin.include_tasks:
     file: deploy.yml
   when: not (ansible_check_mode | bool)

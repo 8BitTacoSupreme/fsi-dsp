@@ -3,18 +3,19 @@
   hosts: all
   gather_facts: true
   tasks:
+    # A Connect REST fake that answers PUT (python -m http.server cannot), so a
+    # rejected deploy fails the run instead of passing unnoticed.
     - name: Start mock Connect REST API server in background
       ansible.builtin.shell: |
-        cd tests/ansible/fixtures/mock_responses/connect
-        python3 -m http.server 18083 &
+        python3 tests/ansible/fake_connect_rest.py --port 18083 &
         echo $! > /tmp/mock_connect_rest.pid
       args:
-        chdir: "{{ playbook_dir }}/../../../.."
-      changed_when: true
+        chdir: "{{ playbook_dir }}/../../../../.."
+      changed_when: false
 
     - name: Wait for mock server to be ready
       ansible.builtin.wait_for:
-        host: localhost
+        host: 127.0.0.1
         port: 18083
         timeout: 10
 
@@ -22,7 +23,7 @@
       ansible.builtin.include_role:
         name: cp_connect
       vars:
-        cp_connect_url: "http://localhost:18083"
+        cp_connect_url: "http://127.0.0.1:18083"
         cp_connect_validate_health: false
         cp_connectors:
           - name: jdbc-source-oracle-east

@@ -66,7 +66,7 @@ def test_start_script_sets_nothing_and_parses(rendered):
 
 def test_worker_uses_listeners_and_prefixed_security(rendered):
     props = read(rendered, "rendered/connect-distributed.properties").splitlines()
-    assert "listeners=http://0.0.0.0:8083" in props
+    assert "listeners=https://0.0.0.0:8083" in props
     assert not any(p.startswith(("rest.port", "rest.host.name")) for p in props)
     assert "bootstrap.servers=kafka-0.cp.test:9093,kafka-1.cp.test:9093" in props
     # Connect hands producers and consumers only their prefixed settings, so
@@ -110,7 +110,8 @@ def test_cc_target_keeps_the_api_key_path(tmp_path):
         assert prefix + "security.protocol=SASL_SSL" in props
         assert prefix + "sasl.mechanism=PLAIN" in props
     assert any(p.startswith("sasl.jaas.config=") and 'username="TESTKEY"' in p for p in props)
-    assert not [p for p in props if "ssl.keystore" in p]
+    # No Kafka client keystore; the REST listener's own stores are listeners.https.*
+    assert not [p for p in props if "ssl.keystore" in p and not p.startswith("listeners.https.")]
     config = source_connector(out)
     assert config["confluent.topic.security.protocol"] == "SASL_SSL"
     assert 'password="TESTSECRET"' in config["confluent.topic.sasl.jaas.config"]

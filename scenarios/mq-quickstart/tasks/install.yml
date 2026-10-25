@@ -11,6 +11,8 @@
 #   start-connect.sh                  IBM-1047, read by z/OS bash
 #   connect-log4j2.yaml               ISO8859-1: read as bytes by log4j2 in the JVM
 #   ssl/kafka-client.p12 (CP only)    binary, tagged binary, 0600
+#   ssl/rest-server.p12,
+#   ssl/rest-client-ca.p12 (mtls)     binary, tagged binary, 0600
 # =============================================================================
 
 - name: Create the z/OS UNIX layout
@@ -155,13 +157,14 @@
   loop_control:
     label: "{{ item.name }} -> {{ item.encoding }}"
 
-# --- Confluent Platform: the mTLS client keystore -----------------------------------
-# Kafka opens ssl.keystore.location as a plain file (DefaultSslEngineFactory), so
-# the key cannot stay in a RACF key ring: it lands here, readable by the started
-# task's user only. The playbook environment's FILETAG(AUTOTAG) could tag it as
-# text, so it is tagged binary explicitly and the tag is checked.
-- name: Install the client keystore
-  when: cp_target | bool
+# --- PKCS12 stores: the Kafka mTLS keystore (CP) and the REST API stores (mtls) -----
+# Kafka opens ssl.keystore.location as a plain file (DefaultSslEngineFactory), and
+# the REST listener loads its stores by path too, so the keys cannot stay in a RACF
+# key ring: they land here, readable by the started task's user only. The playbook
+# environment's FILETAG(AUTOTAG) could tag them as text, so each is tagged binary
+# explicitly and the tag is checked.
+- name: Install the PKCS12 stores
+  when: zos_binary_stores | length > 0
   block:
     - name: Create the keystore directory (owner only)
       ansible.builtin.file:
@@ -169,28 +172,40 @@
         state: directory
         mode: "0700"
 
-    - name: Transfer the PKCS12 keystore in binary
+    - name: Transfer each PKCS12 store in binary
       ibm.ibm_zos_core.zos_copy:
-        src: "{{ kafka_client_keystore }}"
-        dest: "{{ zos_kafka_keystore_path }}"
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
         binary: true
         mode: "0600"
         replace: true
+      loop: "{{ zos_binary_stores }}"
+      loop_control:
+        label: "{{ item.dest }}"
 
-    - name: Tag the keystore binary  # noqa: command-instead-of-module
+    - name: Tag each store binary  # noqa: command-instead-of-module
       ansible.builtin.command:
-        cmd: chtag -b {{ zos_kafka_keystore_path | quote }}
+        cmd: chtag -b {{ item.dest | quote }}
+      loop: "{{ zos_binary_stores }}"
+      loop_control:
+        label: "{{ item.dest }}"
       changed_when: true
 
-    - name: Read the keystore tag
+    - name: Read each store's tag
       ansible.builtin.command:
-        cmd: ls -T {{ zos_kafka_keystore_path | quote }}
-      register: _keystore_tag
+        cmd: ls -T {{ item.dest | quote }}
+      loop: "{{ zos_binary_stores }}"
+      loop_control:
+        label: "{{ item.dest }}"
+      register: _store_tags
       changed_when: false
 
-    - name: Assert the keystore is tagged binary, not text
+    - name: Assert each store is tagged binary, not text
       ansible.builtin.assert:
         that:
-          - _keystore_tag.stdout is search('^b\s+binary')
-          - "'T=off' in _keystore_tag.stdout"
-        fail_msg: "{{ zos_kafka_keystore_path }} is not tagged binary: {{ _keystore_tag.stdout }}"
+          - item.stdout is search('^b\s+binary')
+          - "'T=off' in item.stdout"
+        fail_msg: "{{ item.item.dest }} is not tagged binary: {{ item.stdout }}"
+      loop: "{{ _store_tags.results }}"
+      loop_control:
+        label: "{{ item.item.dest }}"

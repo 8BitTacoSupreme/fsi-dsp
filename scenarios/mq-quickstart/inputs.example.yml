@@ -8,6 +8,8 @@
 #     vault_kafka_api_key: ...             # kafka_target: cc
 #     vault_kafka_api_secret: ...          # kafka_target: cc
 #     vault_confluent_license: ...         # premium z/OS connectors need a subscription
+#     vault_connect_rest_keystore_password: ...    # connect_rest_security: mtls
+#     vault_connect_rest_truststore_password: ...  # connect_rest_security: mtls
 #
 # Every <PLACEHOLDER_...> must be replaced; the build play refuses to run
 # while one is left.
@@ -133,6 +135,35 @@ connect_value_converter: org.apache.kafka.connect.storage.StringConverter
 connect_rest_port: 8083
 # The z/OS host name other workers and this controller use to reach the API.
 connect_rest_host: <PLACEHOLDER_ZOS_HOSTNAME>
+# mtls (default): HTTPS, and the API accepts only clients with a certificate
+#   signed by a CA in connect_rest_truststore. There is no REST RBAC, so any such
+#   certificate has full control of the connectors.
+# http: plain HTTP, no authentication; limit inbound access to the controller.
+connect_rest_security: mtls
+# THE CONTRACT WITH THE PKI TEAM (connect_rest_security: mtls). Build checks each
+# file exists, is readable and non-empty before anything is copied:
+#   On z/OS (copied binary, 0600, into <connect_base_dir>/config/ssl/):
+#   - connect_rest_keystore: PKCS12 with the REST server key and certificate.
+#     SAN = connect_rest_host exactly as written; EKU serverAuth and clientAuth
+#     (workers forward requests to the leader with this certificate).
+#   - connect_rest_truststore: PKCS12 holding the CA that signs the controller's
+#     client certificate (and the workers' REST certificates), as Java trusted
+#     certificate entries: keytool -importcert -storetype PKCS12, or openssl
+#     pkcs12 -export -nokeys -jdktrust anyExtendedKeyUsage (OpenSSL 3.2+). A store
+#     without the trust attribute loads empty and rejects every client.
+#     Use a dedicated CA: with no REST RBAC, anything it signs has full control.
+#   On this controller (ansible.builtin.uri reads PEM only):
+#   - connect_rest_ca_pem: the CA that signs the REST server certificate.
+#   - connect_rest_client_cert_pem / connect_rest_client_key_pem: this controller's
+#     client certificate and its key, unencrypted (uri has no passphrase option),
+#     mode 0600 (build refuses a key readable by group or others).
+connect_rest_keystore: <PLACEHOLDER_PATH>/kafconn-rest.keystore.p12
+connect_rest_keystore_password: "{{ vault_connect_rest_keystore_password }}"
+connect_rest_truststore: <PLACEHOLDER_PATH>/kafconn-rest-clients.truststore.p12
+connect_rest_truststore_password: "{{ vault_connect_rest_truststore_password }}"
+connect_rest_ca_pem: <PLACEHOLDER_PATH>/rest-ca.pem
+connect_rest_client_cert_pem: <PLACEHOLDER_PATH>/controller.cert.pem
+connect_rest_client_key_pem: <PLACEHOLDER_PATH>/controller.key.pem
 
 # --- TLS trust for the brokers ----------------------------------------------------------
 # racf_keyring: trust via a RACF key ring (the guide's choice; RACFRING job).

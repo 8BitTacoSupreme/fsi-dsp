@@ -19,6 +19,8 @@
 #   optional: ZOS_SSH_PORT ZOS_SSH_KEY ZOS_CODESET MIN_FREE_KB ZIIP_CONFIRMED
 #             KAFKA_TARGET (cp, the default, or cc) CP_PLACEMENT
 #             KAFKA_CLIENT_KEYSTORE (checked when KAFKA_TARGET=cp)
+#             CONNECT_REST_SECURITY (mtls, the default, or http) and, for mtls,
+#             REST_KEYSTORE REST_TRUSTSTORE REST_CA_PEM REST_CLIENT_CERT REST_CLIENT_KEY
 # The build play validates the target choices; preflight only reports them.
 #
 # Exit: 0 all checks pass (WARNs allowed), 1 any FAIL, 2 usage.
@@ -46,6 +48,12 @@ ZIIP_CONFIRMED="${ZIIP_CONFIRMED:-no}"
 KAFKA_TARGET="${KAFKA_TARGET:-cp}"
 CP_PLACEMENT="${CP_PLACEMENT:-}"
 KAFKA_CLIENT_KEYSTORE="${KAFKA_CLIENT_KEYSTORE:-}"
+CONNECT_REST_SECURITY="${CONNECT_REST_SECURITY:-mtls}"
+REST_KEYSTORE="${REST_KEYSTORE:-}"
+REST_TRUSTSTORE="${REST_TRUSTSTORE:-}"
+REST_CA_PEM="${REST_CA_PEM:-}"
+REST_CLIENT_CERT="${REST_CLIENT_CERT:-}"
+REST_CLIENT_KEY="${REST_CLIENT_KEY:-}"
 BROKERS="${KAFKA_BOOTSTRAP//,/ }"
 ZOS_MIN="2.5"        # ibm.ibm_zos_core 2.1 supports z/OS V2R5-V3Rx
 JAVA_MIN_MAJOR="17"  # Connect in CP 8.x requires Java 17+
@@ -96,6 +104,7 @@ if [[ "${KAFKA_TARGET}" == "cp" ]]; then
 else
   echo "Kafka target: ${KAFKA_TARGET}, brokers ${KAFKA_BOOTSTRAP}"
 fi
+echo "Connect REST API: ${CONNECT_REST_SECURITY}"
 echo
 
 # --- Controller ------------------------------------------------------------------
@@ -148,6 +157,23 @@ if [[ "${KAFKA_TARGET}" == "cp" ]]; then
   else
     fail "client keystore" "${KAFKA_CLIENT_KEYSTORE:-kafka_client_keystore unset} missing, unreadable or empty; the Kafka platform team issues it (inputs.yml contract, item 3)"
   fi
+fi
+
+# Connect REST API over mTLS: two stores travel to z/OS, three PEMs stay here.
+# rest_file LABEL PATH INPUT_NAME
+rest_file() {
+  if [[ -f "$2" && -r "$2" && -s "$2" ]]; then
+    ok "$1" "$(basename "$2") present"
+  else
+    fail "$1" "${2:-$3 unset} missing, unreadable or empty; the PKI team issues it (inputs.yml contract, Connect REST API)"
+  fi
+}
+if [[ "${CONNECT_REST_SECURITY}" == "mtls" ]]; then
+  rest_file "REST server keystore" "${REST_KEYSTORE}" connect_rest_keystore
+  rest_file "REST client-CA truststore" "${REST_TRUSTSTORE}" connect_rest_truststore
+  rest_file "REST CA (controller)" "${REST_CA_PEM}" connect_rest_ca_pem
+  rest_file "REST client certificate (controller)" "${REST_CLIENT_CERT}" connect_rest_client_cert_pem
+  rest_file "REST client key (controller)" "${REST_CLIENT_KEY}" connect_rest_client_key_pem
 fi
 
 # --- z/OS ----------------------------------------------------------------------------

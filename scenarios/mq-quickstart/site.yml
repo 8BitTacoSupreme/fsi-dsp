@@ -84,6 +84,14 @@
         KAFKA_TARGET: "{{ kafka_target }}"
         CP_PLACEMENT: "{{ cp_placement if (cp_target | bool) else '' }}"
         KAFKA_CLIENT_KEYSTORE: "{{ kafka_client_keystore if (cp_target | bool) else '' }}"
+        # default(''): an inputs.yml from before REST mTLS gets [FAIL] lines, not a
+        # template error, and http mode reads none of these.
+        CONNECT_REST_SECURITY: "{{ connect_rest_security }}"
+        REST_KEYSTORE: "{{ (connect_rest_keystore | default('')) if (connect_rest_mtls | bool) else '' }}"
+        REST_TRUSTSTORE: "{{ (connect_rest_truststore | default('')) if (connect_rest_mtls | bool) else '' }}"
+        REST_CA_PEM: "{{ (connect_rest_ca_pem | default('')) if (connect_rest_mtls | bool) else '' }}"
+        REST_CLIENT_CERT: "{{ (connect_rest_client_cert_pem | default('')) if (connect_rest_mtls | bool) else '' }}"
+        REST_CLIENT_KEY: "{{ (connect_rest_client_key_pem | default('')) if (connect_rest_mtls | bool) else '' }}"
         ZIIP_CONFIRMED: "{{ 'yes' if (preflight_ziip_confirmed | bool) else 'no' }}"
         CONNECT_TARBALL: "{{ connect_tarball }}"
         CONNECT_TOPDIR: "{{ connect_tarball_topdir }}"
@@ -184,6 +192,9 @@
         name: cp_connect
       vars:
         cp_connect_url: "{{ connect_rest_url }}"
+        cp_connect_ca_path: "{{ connect_rest_ca_pem if (connect_rest_mtls | bool) else '' }}"
+        cp_connect_client_cert: "{{ connect_rest_client_cert_pem if (connect_rest_mtls | bool) else '' }}"
+        cp_connect_client_key: "{{ connect_rest_client_key_pem if (connect_rest_mtls | bool) else '' }}"
         cp_connectors: "{{ mq_connectors }}"
         cp_connect_health_retries: 12
         cp_connect_health_delay: 10
