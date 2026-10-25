@@ -18,14 +18,13 @@ cp_lakehouse_databricks_jar_path: "/opt/kafka-connect/plugins/confluentinc-kafka
 cp_lakehouse_snowflake_jar_path: "/opt/kafka-connect/plugins/snowflakeinc-snowflake-kafka-connector"
 
 # ---------------------------------------------------------------------------
-# FIPS-mode connector worker settings (inherited from group_vars/all.yml)
+# Connector worker JVM settings (PKCS12 MAC portability). No FIPS flags:
+# CP FIPS mode is not yet supported on s390x.
 # ---------------------------------------------------------------------------
-# These mirror the broker FIPS settings so the Connect worker's JVM behaves
-# consistently with the broker on PKCS12 MAC algorithms and cipher suites.
+# This mirrors the broker PKCS12 MAC setting so the Connect worker's JVM
+# loads the same keystores as the broker.
 cp_connect_jvm_extra_args:
   - "-Dkeystore.pkcs12.macAlgorithm=HmacPBESHA256"
-  - "-Dcom.ibm.fips.mode=true"          # IBM Semeru FIPS toggle
-  - "-Djava.security.properties=/etc/kafka-connect/security.fips.properties"
 
 # ---------------------------------------------------------------------------
 # Credential store: Vault preferred; JCEKS fallback for closed z/IRD networks

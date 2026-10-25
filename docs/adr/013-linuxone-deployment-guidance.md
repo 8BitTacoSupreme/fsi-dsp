@@ -1,8 +1,10 @@
-# ADR-009: LinuxONE / s390x Deployment Guidance
+# ADR-013: LinuxONE / s390x Deployment Guidance
 
-## Status
+**Status:** Accepted
+**Date:** 2026-04-27
+**Author:** Jeremy Hogan
 
-Accepted
+> Renumbered from 009 on 2026-10-24 (collided with 009-linuxone-kafka-offload.md).
 
 ## Context
 
@@ -52,3 +54,30 @@ IBM CP Assist for Cryptographic Functions (CPACF) accelerates AES, SHA, and othe
 - s390x-specific FIPS validation path added (IBM providers instead of Bouncy Castle)
 - Documentation covers the full "Usual Suspects" checklist for s390x TLS debugging
 - CEX integration is scoped but optional, reducing barrier to adoption
+
+## Amendment 2026-10-24 — s390x FIPS
+
+Confluent Platform FIPS mode is not yet supported on s390x (CP versions-interoperability,
+"Linux on IBM Z (s390x) support", checked 2026-10-24). A tier whose policy requires FIPS 140
+validated crypto on the brokers runs its brokers on x86/ARM until Confluent lists FIPS mode
+for s390x. OS/JDK FIPS modes on s390x (RHEL `fips=1`, IBM Semeru `IBMJCEPlusFIPS`) are
+outside Confluent's s390x support statement; this kit makes no claim that they work or break
+with CP. mTLS, TLS 1.2/1.3 and CPACF acceleration are unaffected.
+
+The decisions above are amended as follows; their text is left as written:
+
+- **Context** ("Keystore format and FIPS compliance") and **Decision 2** ("FIPS compliance
+  (keys must be generated in the FIPS boundary)"): no FIPS boundary applies on s390x.
+  On-target key generation stands on its other two reasons, cross-JDK portability and
+  keys never crossing the network.
+- **Decision 3**: PKCS12 stands. "On s390x with IBM Semeru, the FIPS-compliant path is
+  PKCS12 with `IBMJCEPlusFIPS` provider" is withdrawn.
+- **Decision 4**: IBM's FIPS providers are no longer a reason to choose Semeru. Confluent's
+  supported-JDK list (Temurin, OpenJDK, Zulu, Oracle) does not name Semeru; this amendment
+  does not reverse the JDK decision.
+- **Decision 6** and **Consequences** ("s390x-specific FIPS validation path added"): the
+  s390x FIPS validation path is withdrawn; `scripts/validate-fips.sh` exits 3 (not
+  applicable) on s390x.
+
+The same support statement sets the s390x floor at CP 8.2.0, with a separately purchased IBM Z
+software entitlement. See `docs/linuxone-fips-guide.md` and the accelerator's `KNOWN-GAPS.md` G-02.

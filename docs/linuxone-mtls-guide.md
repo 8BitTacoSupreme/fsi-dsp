@@ -4,8 +4,8 @@ Step-by-step guide for provisioning mTLS certificates on Confluent Platform runn
 
 ## Prerequisites
 
-1. **Generate on target**: All private keys and keystores must be generated on the target host, not the Ansible controller. This ensures FIPS boundary compliance and JDK-specific keystore compatibility.
-2. **PKCS12 only**: Do not use JKS. PKCS12 is the industry standard and the only format compatible with IBM JDK FIPS providers.
+1. **Generate on target**: All private keys and keystores must be generated on the target host, not the Ansible controller. This keeps private keys off the controller and keystores compatible with the target JDK.
+2. **PKCS12 only**: Do not use JKS. PKCS12 is the industry standard and loads on both OpenJDK and IBM Semeru.
 3. **Explicit algorithms**: Always specify `-keyalg RSA -keysize 2048 -sigalg SHA256withRSA` explicitly. Do not rely on JDK defaults, which differ between OpenJDK and IBM Semeru.
 4. **SAN requirements**: Every broker cert must include DNS SANs for FQDN and short hostname, plus IP SAN. Missing SANs cause `ssl.endpoint.identification.algorithm=HTTPS` to reject connections.
 

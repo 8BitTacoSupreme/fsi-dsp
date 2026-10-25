@@ -11,7 +11,7 @@ operational impact, the approved workaround, and current status.
 | # | Gap | Impact | Workaround | Status |
 |---|-----|--------|------------|--------|
 | G-01 | Fetch-by-SHA requires network access at activation | `flox activate` (and CI) requires outbound HTTPS to github.com | Pre-fetch in a network-accessible environment and artifact-cache `base/upstream/`; or configure OCP cluster egress to allow github.com access | Open |
-| G-02 | FIPS only effective on FIPS-at-install OCP cluster | `spec.tls.fips.enabled: true` is a no-op on a non-FIPS OCP installation | OCP must be installed with `fips: true` in `install-config.yaml`; post-install FIPS is not supported by Red Hat | Open |
+| G-02 | CP FIPS mode not yet supported on s390x | No Confluent Platform component on LinuxONE can run CP FIPS mode; layer 02 does not set `spec.tls.fips.enabled` | Tiers whose policy requires FIPS 140 validated broker crypto run brokers on x86/ARM until Confluent lists FIPS mode for s390x; mTLS, TLS 1.2/1.3 and CPACF stay in place | Open |
 | G-03 | No native Dynatrace Kafka Connector | Dynatrace does not publish a first-party Kafka Connect connector | HTTP Sink connector (confluentinc/kafka-connect-http) POSTing to Dynatrace generic log ingest API v2; see `layers/04-audit/connect-cr.yaml` | Workaround in place |
 | G-04 | Control Center next-gen s390x image availability unverified | C3 next-gen UI may not have a published s390x multi-arch image | Use Control Center classic (included in CP 8.2.0 s390x images) until next-gen image is verified; check `docker manifest inspect confluentinc/confluent-control-center:8.2.0` | Needs verification |
 | G-05 | SR bootstrap Job base image must be s390x | `job-sr-bootstrap.yaml` image must run on s390x workers; standard `alpine` or `debian` images may lack s390x variants | Use `registry.access.redhat.com/ubi9/ubi-minimal:latest` — UBI9 has s390x multi-arch manifests; verify with `docker manifest inspect` before deploying | Workaround in place |
@@ -46,19 +46,33 @@ clones `mmondics/Confluent-LinuxONE-Mirror` at a pinned SHA at activation time.
 
 ---
 
-### G-02: FIPS requires OCP installed in FIPS mode
+### G-02: CP FIPS mode not yet supported on s390x
 
-**Context:** `spec.tls.fips.enabled: true` on CFK CRs instructs the CP Java process
-to load IBM Semeru's `IBMJCEPlusFIPS` providers (or OpenJDK FIPS equivalent).
+**Context:** Confluent's support statement for Linux on IBM Z lists "FIPS mode" under
+"The following are not yet supported on s390x" (CP versions-interoperability, "Linux on
+IBM Z (s390x) support", checked 2026-10-24 against the 8.3 docs). CFK's
+`spec.tls.fips.enabled` turns on CP FIPS mode, so layer 02 does not set it.
 
-**Impact:** On a non-FIPS OCP cluster, this field is accepted by the CRD (no admission
-rejection) but has no effect — the JVM does not load FIPS providers.
+**Impact:** No CP component on LinuxONE runs in CP FIPS mode. A tier whose policy requires
+FIPS 140 validated crypto on the brokers cannot place its brokers on s390x today; it runs
+them on x86/ARM until Confluent lists FIPS mode for s390x. mTLS, TLS 1.2/1.3 and CPACF
+acceleration are unaffected.
 
-**Detection:** `oc get node -o json | jq '.items[0].status.nodeInfo.operatingSystem'`
-and verify `fips_enabled=1` in `/proc/sys/crypto/fips_enabled` on a worker node.
+**OS/JDK FIPS:** OS/JDK FIPS modes on s390x (RHEL `fips=1`, IBM Semeru `IBMJCEPlusFIPS`)
+are outside Confluent's s390x support statement; this kit makes no claim that they work
+or break with CP.
 
-**Consequence:** Deployments that skip FIPS-at-install and rely on `spec.tls.fips.enabled`
-will silently fail FSI compliance. Verify OCP FIPS mode before applying layer 02.
+**Detection:** `layers/02-tls/validate-mtls.sh` fails if `spec.tls.fips.enabled` is set on
+the Kafka CR. `tests/ansible/test_s390x_support_floor.py` fails on any s390x manifest or
+var file that turns on CP or JVM FIPS mode.
+
+**The earlier rule** (FIPS takes effect only on an OCP cluster installed with `fips: true`)
+still holds for x86/ARM OCP clusters running CP FIPS mode. It does not apply here.
+
+**Re-check trigger:** when Confluent lists FIPS mode for s390x, restore the `fips` blocks
+in the 02-tls patches, invert the FIPS tests in `test_s390x_support_floor.py` and
+`validate-mtls.sh` check 2, mark G-02 Resolved, and change the cflt-ai
+`tools/vendor-sources.json` G-02 status in the same commit as that submodule bump.
 
 ---
 

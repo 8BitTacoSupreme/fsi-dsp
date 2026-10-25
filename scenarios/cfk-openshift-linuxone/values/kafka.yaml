@@ -26,7 +26,7 @@ kafka:
         effect: "NoSchedule"
   tls:
     enabled: true
-    # FIPS must be enabled at OCP install time on s390x, not post-hoc
+    # No CP FIPS mode: it is not yet supported on s390x.
     # See: docs/linuxone-fips-guide.md
 
 schemaregistry:

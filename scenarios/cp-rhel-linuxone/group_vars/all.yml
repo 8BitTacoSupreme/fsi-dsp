@@ -3,14 +3,17 @@
 # CP on RHEL on LinuxONE (s390x) -- Common Variables
 # =============================================================================
 # Targets IBM LinuxONE (s390x architecture) with IBM Semeru 17 JDK.
-# PKCS12 keystores with FIPS-aware MAC algorithm flags.
+# PKCS12 keystores with an explicit MAC algorithm for cross-JDK portability.
+# CP FIPS mode is not yet supported on s390x -- see docs/linuxone-fips-guide.md.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
 # CP version and base settings
 # ---------------------------------------------------------------------------
 confluent_server_enabled: true
-confluent_package_version: "7.7.0"
+# Confluent Platform supports s390x from 8.2.0 (IBM Z entitlement required);
+# 8.2.4 is the latest 8.2 patch (versions-interoperability, checked 2026-10-24).
+confluent_package_version: "8.2.4"
 
 # ---------------------------------------------------------------------------
 # Architecture: s390x / LinuxONE
@@ -37,7 +40,7 @@ cp_mtls_ssl_keystore_type: PKCS12
 cp_mtls_ssl_truststore_type: PKCS12
 cp_mtls_keystore_backend: software
 
-# FIPS-aware PKCS12 MAC algorithm for cross-platform portability
+# PKCS12 MAC algorithm pinned for cross-JDK keystore portability
 # Prevents "HmacPBESHA1 vs SHA-256" mismatch when keystores cross x86/s390x
 cp_mtls_pkcs12_mac_flags: "-J-Dkeystore.pkcs12.macAlgorithm=HmacPBESHA256"
 
@@ -50,9 +53,10 @@ cp_mtls_ssl_cipher_suites: ""
 jmxexporter_enabled: true
 
 # ---------------------------------------------------------------------------
-# FIPS
+# FIPS -- CP FIPS mode is not yet supported on s390x (versions-interoperability,
+# checked 2026-10-24). Do not set true; FIPS-mandated broker tiers run on x86/ARM.
 # ---------------------------------------------------------------------------
-fips_enabled: true
+fips_enabled: false
 
 # ---------------------------------------------------------------------------
 # Vault references (override in vault.yml)

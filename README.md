@@ -74,7 +74,7 @@ FSI-hardened Confluent Platform on IBM LinuxONE (s390x) via the CFK operator on 
 | Layer | Control |
 |-------|---------|
 | `01-rbac` | MDS RBAC — platform-admin, topic-admin, producer/consumer-only, auditor-readonly, schema-admin |
-| `02-tls` | mTLS between all components, FIPS cipher suites, cert-manager rotation |
+| `02-tls` | mTLS between all components, TLS 1.2/1.3 with AES-GCM suites, cert-manager rotation; no CP FIPS mode (not yet supported on s390x) |
 | `03-schema-governance` | FULL_TRANSITIVE compatibility, subject-naming enforcement, hard-delete controls |
 | `04-audit` | Broker audit log → 7-year retention topic → Splunk / Dynatrace SIEM sinks |
 | `05-flink` | Apache Flink via Confluent Manager for Apache Flink (CMF) — `FlinkApplication` CRs, self-contained mTLS + RBAC, FSI example jobs |
@@ -176,7 +176,7 @@ Plus: Kafka Connect JDBC configs (East/West), Docker Compose local dev (Kafka + 
 - **RBAC**: CC role bindings (Terraform), CFK ACLs + MDS (Helm), CP MDS (Ansible)
 - **Encryption**: mTLS across all deployment models, cert-manager for CFK
 - **Secrets**: Vault, Azure Key Vault, AWS Secrets Manager, Google Secret Manager
-- **FIPS 140-2**: Automated validation for CP on RHEL and CFK on FIPS-enabled OpenShift (`scripts/validate-fips.sh`)
+- **FIPS 140-2**: Automated validation for CP on RHEL and CFK on FIPS-enabled OpenShift (`scripts/validate-fips.sh`), on x86/ARM: CP FIPS mode is not yet supported on s390x
 - **Compliance**: Configurable retention up to 7 years (OFAC/AML), schema evolution enforcement in CI
 
 ### Ansible Automation (`ansible/`)
@@ -290,7 +290,7 @@ tests/
 - **[Credential Rotation](docs/rotation-runbook.md)** — Zero-downtime rotation procedures
 - **[LinuxONE mTLS Guide](docs/linuxone-mtls-guide.md)** -- Certificate provisioning on s390x
 - **[LinuxONE Troubleshooting](docs/linuxone-troubleshooting.md)** -- s390x TLS debug guide
-- **[LinuxONE FIPS](docs/linuxone-fips-guide.md)** -- s390x FIPS validation
+- **[LinuxONE FIPS](docs/linuxone-fips-guide.md)** -- s390x FIPS status (CP FIPS mode not yet supported)
 - **[LinuxONE CEX/HSM](docs/linuxone-cex-guide.md)** -- Hardware security module guide
 - **[ADRs](docs/adr/)** — Architecture Decision Records
 

@@ -6,11 +6,11 @@ Confluent for Kubernetes on OpenShift running on IBM LinuxONE (s390x architectur
 
 - OpenShift Container Platform 4.x on s390x (or mixed-arch cluster with s390x workers)
 - CFK operator installed (Helm or OLM)
-- Multi-arch container images (Confluent provides s390x variants)
+- Multi-arch container images (Confluent provides s390x variants from CP 8.2.0)
 
 ## LinuxONE-Specific Notes
 
-- **FIPS**: On s390x, FIPS must be enabled at OCP install time. Post-install enablement is NOT supported. See `docs/linuxone-fips-guide.md`.
+- **FIPS**: Confluent Platform FIPS mode is not yet supported on s390x, so do not set `spec.tls.fips.enabled` on s390x CRs. A tier whose policy requires FIPS 140 validated broker crypto runs its brokers on x86/ARM. See `docs/linuxone-fips-guide.md`.
 - **Node affinity**: The Helm values include `nodeAffinity` rules targeting `kubernetes.io/arch: s390x` for mixed-arch clusters. Remove if the cluster is s390x-only.
 - **Sidecar images**: Monitoring agents and log shippers may run x86 under QEMU emulation with ~10x throughput penalty. Verify s390x-native builds are available.
 - **Multi-arch images**: Confluent multi-arch images include s390x variants. Set `pullPolicy: IfNotPresent` to avoid unnecessary pulls.

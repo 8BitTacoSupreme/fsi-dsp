@@ -1,7 +1,7 @@
 # MANIFEST.yaml v1 — Stable contract between fsi-dsp and cflt-ai
 # Every asset in this file has a stable ID that MUST NOT be removed
 # without a major version bump. See CNTR-04 CI enforcement.
-version: "1.3.0"
+version: "1.4.0"
 schema: "fsi-dsp/manifest/v1"
 
 capabilities:
@@ -338,7 +338,7 @@ capabilities:
     type: script
     name: "validate-fips.sh"
     path: "scripts/validate-fips.sh"
-    description: "Validate FIPS 140-2 compliance on target nodes"
+    description: "Validate FIPS 140-2 compliance on x86/ARM CP nodes; exits 3 (not applicable) on s390x, where CP FIPS mode is not yet supported"
 
   # ──────────────────────────────────────────────────
   # Observability Configs (6 + 1 doc)
@@ -510,7 +510,7 @@ capabilities:
     type: scenario
     name: "cp-rhel-linuxone"
     path: "scenarios/cp-rhel-linuxone"
-    description: "Confluent Platform on RHEL deployment scenario targeting IBM LinuxONE / s390x with IBM Semeru JDK + FIPS + JCEKS keystore overrides. Lakehouse playbooks per ADR-011."
+    description: "Confluent Platform 8.2.x on RHEL on IBM LinuxONE / s390x: mTLS (PKCS12, on-target keygen), IBM Semeru JDK default, JCEKS credential fallback. CP FIPS mode not set (not yet supported on s390x). Lakehouse playbooks per ADR-011."
 
   # ── Scenarios (1 — mainframe integration) ──
   - id: "scenario/mq-quickstart"
@@ -545,3 +545,10 @@ capabilities:
     name: "ADR-012: Database Connector Patterns"
     path: "docs/adr/012-database-connector-patterns.md"
     description: "MongoDB, Redis, CockroachDB, PostgreSQL CDC/sink connectors across CC managed, CP self-managed, CFK, and CP-on-RHEL-on-LinuxONE deployment models. Polymorphic module/db_connector packages CC variants; ansible roles wrap self-managed."
+
+  # ── ADRs (1 — ADR-013, renumbered from the duplicate 009) ──
+  - id: "adr/013"
+    type: adr
+    name: "LinuxONE / s390x deployment guidance"
+    path: "docs/adr/013-linuxone-deployment-guidance.md"
+    status: accepted

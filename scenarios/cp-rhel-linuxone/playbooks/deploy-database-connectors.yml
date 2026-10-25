@@ -5,7 +5,7 @@
 # Deploys MongoDB, Redis, CockroachDB, and PostgreSQL connectors on a
 # CP-on-RHEL Connect worker running on s390x. Wraps the generic
 # ansible/playbooks/deploy-database-connectors.yml with LinuxONE-specific
-# overrides (IBM Semeru JDK paths, FIPS-mode JVM args, JCEKS credential
+# overrides (IBM Semeru JDK paths, PKCS12 MAC JVM arg, JCEKS credential
 # store fallback for closed z/IRD networks).
 #
 # Implements the self-managed paths from ADR-012 on LinuxONE.
@@ -48,7 +48,8 @@
         fail_msg: >-
           Connector worker JDK is not IBM Semeru/OpenJ9.
           On s390x, IBM Semeru is required for CPACF crypto acceleration
-          (matters for TLS-heavy CDC pipelines). See docs/linuxone-fips-guide.md.
+          (matters for TLS-heavy CDC pipelines). See
+          docs/adr/013-linuxone-deployment-guidance.md.
 
     - name: Stat each required connector JAR path on s390x
       ansible.builtin.stat:
@@ -137,7 +138,7 @@
           LinuxONE Database Connector Deployment Summary
           Architecture: {{ ansible_architecture }}
           JDK: {{ _java_version.stderr_lines[0] | default('unknown') }}
-          FIPS: {{ fips_enabled | default('unknown') }}
+          CP FIPS mode: off (not yet supported on s390x)
           ============================================
           MongoDB:     source={{ cp_mongodb_results.source_created | default(0) }},
                        sink={{ cp_mongodb_results.sink_created | default(0) }}

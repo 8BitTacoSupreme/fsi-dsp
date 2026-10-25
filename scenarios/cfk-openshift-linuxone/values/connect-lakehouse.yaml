@@ -45,7 +45,7 @@ connect:
         value: "s390x"
         effect: "NoSchedule"
 
-  # FIPS posture inherited from cluster (see linuxone-fips-guide.md).
+  # No CP FIPS mode on s390x (see docs/linuxone-fips-guide.md).
   # The Snowflake and Databricks JARs are pure Java; CPACF accelerates AES
   # and SHA operations transparently.
 

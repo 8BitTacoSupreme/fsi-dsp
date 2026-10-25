@@ -8,11 +8,8 @@ spec:
   # and stored as K8s Secrets (never committed to the repo).
   tls:
     secretRef: kafka-tls
-    # FIPS mode requires OCP to be installed with fips: true.
-    # spec.tls.fips.enabled ONLY takes effect on an already-FIPS cluster.
-    # See KNOWN-GAPS.md and layers/02-tls/README.md.
-    fips:
-      enabled: true
+    # No spec.tls.fips: CP FIPS mode is not yet supported on s390x.
+    # See KNOWN-GAPS.md G-02 and layers/02-tls/README.md.
   # s390x node affinity — sourced from scenarios/cfk-openshift-linuxone/values/kafka.yaml
   podTemplate:
     affinity:
@@ -51,6 +48,6 @@ spec:
     server:
       # Pin to TLS 1.2/1.3 only — TLS 1.0 and 1.1 are prohibited in FSI (PCI-DSS 4.x)
       - ssl.enabled.protocols=TLSv1.3,TLSv1.2
-      # FIPS-approved cipher suites for s390x (CPACF-accelerated AES-GCM, SHA-2)
+      # AES-GCM suites (TLS 1.3 + ECDHE-RSA TLS 1.2); CPACF-accelerated on s390x
       # These suites are supported by both IBM Semeru 17 and OpenJDK 17 on s390x
       - ssl.cipher.suites=TLS_AES_256_GCM_SHA384,TLS_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256

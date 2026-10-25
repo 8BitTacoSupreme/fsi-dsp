@@ -15,9 +15,10 @@ IBM CEX cards operate in two modes:
 | Mode | Use Case | Provider Library | Key Type |
 |------|----------|-----------------|----------|
 | CCA | General-purpose crypto, key management | `/usr/lib64/pkcs11/PKCS11_API.so` | CCA keys (non-extractable) |
-| EP11 | Enterprise PKCS#11 compliance | `/usr/lib64/pkcs11/PKCS11_API.so` | EP11 keys (FIPS 140-2 L4) |
+| EP11 | Enterprise PKCS#11 compliance | `/usr/lib64/pkcs11/PKCS11_API.so` | EP11 keys (HSM-bound, non-extractable) |
 
-EP11 mode is recommended for FIPS 140-2 Level 4 compliance.
+EP11 mode keeps private keys inside the CEX HSM. That is a key-storage control, not
+Confluent Platform FIPS mode, which is not yet supported on s390x (`docs/linuxone-fips-guide.md`).
 
 ## Setup
 

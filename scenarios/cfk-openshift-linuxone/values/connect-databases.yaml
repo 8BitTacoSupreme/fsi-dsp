@@ -45,7 +45,7 @@ connect:
         value: "s390x"
         effect: "NoSchedule"
 
-  # FIPS posture inherited from cluster (linuxone-fips-guide.md).
+  # No CP FIPS mode on s390x (docs/linuxone-fips-guide.md).
   # CDC and JDBC sinks are TLS-heavy; CPACF accelerates AES and SHA
   # operations transparently on s390x.
 

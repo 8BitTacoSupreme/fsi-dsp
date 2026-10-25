@@ -16,7 +16,7 @@ processing) layered as Kustomize Components on top of IBM's reference implementa
 ## Prerequisites
 
 - RHOCP 4.14+ cluster on IBM LinuxONE (s390x workers)
-- FIPS mode enabled at OCP install time (required for `spec.tls.fips.enabled` — see `layers/02-tls/README.md`)
+- Not required: OCP FIPS mode. Confluent Platform FIPS mode is not yet supported on s390x, so layer 02 does not set `spec.tls.fips.enabled` (see `KNOWN-GAPS.md` G-02)
 - Cluster admin `kubeconfig` and `oc login` session
 - `flox activate` completed in this directory (installs tools + fetches upstream)
 - LDAP directory accessible from the OCP cluster network (for MDS/RBAC)
@@ -156,7 +156,7 @@ Reference: `ansible/roles/cp_rbac/` provides an optional drift-reconciliation pa
 
 ---
 
-## Step 6: Validate mTLS + FIPS layer [GOODLABS]
+## Step 6: Validate mTLS layer [GOODLABS]
 
 ```bash
 bash layers/02-tls/validate-mtls.sh
@@ -165,6 +165,7 @@ bash layers/02-tls/validate-mtls.sh
 Asserts:
 - Client with no cert → SSL handshake rejected
 - Client with valid cert → `kafka-broker-api-versions` returns broker metadata
+- Kafka CR does not set `spec.tls.fips.enabled` (CP FIPS mode is not yet supported on s390x)
 
 See `layers/02-tls/README.md` for the manual cert rotation procedure (fallback if
 cert-manager is not available).
@@ -237,7 +238,7 @@ Asserts:
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
-| `spec.tls.fips.enabled` has no effect | OCP cluster not installed in FIPS mode | Re-install OCP with `fips: true` in install-config.yaml |
+| `validate-mtls.sh`: `spec.tls.fips.enabled=true` on Kafka CR | A patch re-added the `fips` block | Remove it: CP FIPS mode is not yet supported on s390x (`KNOWN-GAPS.md` G-02) |
 | MDS fails to start | LDAP not reachable or wrong credentials | Check `ldap-credentials` Secret; verify network policy allows MDS→LDAP |
 | `kustomize build` fails with unknown field | Stale CRD schema | `oc get crd kafka.platform.confluent.io -o json` to verify installed version |
 | Audit topic not receiving events | layer 04 applied before layer 01 | Re-apply in order 01→02→03→04; check component ordering in overlay kustomization |

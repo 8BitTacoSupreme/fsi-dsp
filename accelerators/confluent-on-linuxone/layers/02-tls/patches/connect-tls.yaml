@@ -5,8 +5,6 @@ metadata:
 spec:
   tls:
     secretRef: connect-tls
-    fips:
-      enabled: true
   podTemplate:
     affinity:
       nodeAffinity:

@@ -7,8 +7,8 @@ Comprehensive debugging reference for Confluent Platform on IBM LinuxONE (s390x)
 | Category | Issue | Detail | Fix |
 |----------|-------|--------|-----|
 | SSL/JDK | `java.security` provider order | Semeru defaults to IBMJCE + IBMJSSE2, not SunJCE/SunJSSE. Cipher suite names differ, default enabled list is narrower. | Verify provider order in `$JAVA_HOME/conf/security/java.security` |
-| SSL/JDK | FIPS mode keystore rejection | Keystores created on non-FIPS x86 may fail to load on FIPS L1. PKCS12 MAC algorithm mismatch (HmacPBESHA1 vs SHA-256). | Regenerate with `keytool -J-Dkeystore.pkcs12.macAlgorithm=HmacPBESHA256` |
-| SSL/JDK | Cross-platform keystore portability | "Minted on x86, broken on s390x" -- regenerate on the FIPS host with explicit algorithm flags. | Use `-keyalg RSA -keysize 2048 -sigalg SHA256withRSA` explicitly |
+| SSL/JDK | PKCS12 MAC mismatch | Keystores minted on x86 with an HmacPBESHA1 MAC can fail to load on the s390x host, more so under OS/JDK FIPS policies (outside Confluent's s390x support statement). | Regenerate with `keytool -J-Dkeystore.pkcs12.macAlgorithm=HmacPBESHA256` |
+| SSL/JDK | Cross-platform keystore portability | "Minted on x86, broken on s390x" -- regenerate on the target host with explicit algorithm flags. | Use `-keyalg RSA -keysize 2048 -sigalg SHA256withRSA` explicitly |
 | SSL/JDK | x86/s390x cipher suite intersection | x86/OpenJDK client vs s390x/IBM JDK broker -- intersection can be empty. | Pin `ssl.cipher.suites` on both sides to a verified common set |
 | SSL/JDK | TLS 1.3 edge cases on older Semeru | Session resumption and curve negotiation quirks. | Force TLSv1.2 temporarily to diagnose; patch JDK to latest Semeru |
 | SSL/JDK | CEX cards / PKCS#11 | Separate config path: PKCS#11 provider in `java.security`, `ssl.keystore.location=NONE`, CCA vs EP11 mode matters. | Get software keys working first. See `docs/linuxone-cex-guide.md` |
@@ -51,7 +51,7 @@ mkdir -p "${BUNDLE_DIR}"
 java -version 2>&1 > "${BUNDLE_DIR}/java-version.txt"
 java -XshowSettings:all 2>&1 > "${BUNDLE_DIR}/java-settings.txt" || true
 
-# FIPS state
+# OS FIPS state (diagnostic only; CP FIPS mode is not yet supported on s390x)
 cat /proc/sys/crypto/fips_enabled > "${BUNDLE_DIR}/fips-enabled.txt" 2>/dev/null || echo "n/a" > "${BUNDLE_DIR}/fips-enabled.txt"
 
 # Effective Kafka config (redact passwords)
